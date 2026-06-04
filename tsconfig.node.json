@@ -1,0 +1,17 @@
+{
+  "include": ["src/main/**/*", "src/preload/**/*", "electron.vite.config.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2022",
+    "outDir": "out-tsc/node"
+  }
+}
