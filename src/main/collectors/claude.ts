@@ -59,10 +59,10 @@ async function parse(path: string): Promise<Message[]> {
     // Skip synthetic/meta-only assistant entries with no usable content.
     const blocks = blocksFromClaude(msg)
     if (blocks.length === 0) continue
-    const role: Role = msg.role === 'assistant' ? 'assistant' : 'user'
-    // Split out thinking blocks as their own logical messages for search scoping,
-    // but keep ordering. We keep them inline as a single message with mixed blocks;
-    // the role is overridden to 'thinking' only when the message is purely thinking.
+    // When a message consists purely of thinking blocks, label it as 'thinking'
+    // rather than 'assistant' so the UI can render it with a distinct header.
+    const allThinking = blocks.length > 0 && blocks.every((b) => b.kind === 'thinking')
+    const role: Role = msg.role === 'assistant' ? (allThinking ? 'thinking' : 'assistant') : 'user'
     const text = flatten(blocks)
     if (!text) continue
     messages.push({
