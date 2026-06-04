@@ -1,0 +1,232 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Copy, Play } from 'lucide-react'
+import { api } from '../api'
+import type { Message, Role, SessionMeta } from '../types'
+import { AGENT_META, ROLE_META, fullTime, shortPath } from '../util'
+import { MessageItem } from './MessageItem'
+
+interface Props {
+  sessionId: string
+  /** Optional message index to scroll to (from a search hit). */
+  jumpTo?: number
+}
+
+interface DisplayMessage {
+  message: Message
+  relatedIdxs: number[]
+}
+
+const ALL_ROLES: Role[] = ['user', 'assistant', 'thinking', 'tool', 'system']
+
+function isSingleToolMessage(message: Message, kind: 'tool_use' | 'tool_result'): boolean {
+  return message.blocks.length === 1 && message.blocks[0]?.kind === kind
+}
+
+function toolCallId(message: Message): string | undefined {
+  const id = message.blocks[0]?.toolCallId
+  return typeof id === 'string' && id.trim() ? id : undefined
+}
+
+function mergeAdjacentToolMessages(messages: Message[]): DisplayMessage[] {
+  const out: DisplayMessage[] = []
+  const consumed = new Set<number>()
+
+  function findMatchingResult(inputIndex: number): Message | undefined {
+    const input = messages[inputIndex]
+    const id = toolCallId(input)
+    if (id) {
+      return messages.find(
+        (candidate, candidateIndex) =>
+          candidateIndex > inputIndex &&
+          !consumed.has(candidate.idx) &&
+          isSingleToolMessage(candidate, 'tool_result') &&
+          toolCallId(candidate) === id
+      )
+    }
+
+    const next = messages[inputIndex + 1]
+    return next && !consumed.has(next.idx) && isSingleToolMessage(next, 'tool_result') ? next : undefined
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const current = messages[i]
+    if (consumed.has(current.idx)) continue
+
+    const next = isSingleToolMessage(current, 'tool_use') ? findMatchingResult(i) : undefined
+    if (next) {
+      const input = current.blocks[0]
+      const output = next.blocks[0]
+      out.push({
+        message: {
+          ...current,
+          role: 'tool',
+          text: [current.text, next.text].filter(Boolean).join('\n'),
+          blocks: [input, { ...output, toolName: output.toolName ?? input.toolName }],
+          timestamp: current.timestamp ?? next.timestamp
+        },
+        relatedIdxs: [current.idx, next.idx]
+      })
+      consumed.add(next.idx)
+    } else {
+      out.push({ message: current, relatedIdxs: [current.idx] })
+    }
+  }
+  return out
+}
+
+export function TranscriptView({ sessionId, jumpTo }: Props): React.JSX.Element {
+  const [meta, setMeta] = useState<SessionMeta | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [roleFilters, setRoleFilters] = useState<Set<Role>>(new Set())
+  const [loading, setLoading] = useState(true)
+  const [toast, setToast] = useState<string>('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const displayMessages = useMemo(() => mergeAdjacentToolMessages(messages), [messages])
+  const visibleDisplayMessages = useMemo(() => {
+    if (roleFilters.size === 0) return displayMessages
+    return displayMessages.filter(({ message }) => roleFilters.has(message.role))
+  }, [displayMessages, roleFilters])
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    api.getSession(sessionId).then((res) => {
+      if (!alive) return
+      setMeta(res?.meta ?? null)
+      setMessages(res?.messages ?? [])
+      setLoading(false)
+    })
+    return () => {
+      alive = false
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    if (loading || jumpTo == null) return
+    const el = scrollRef.current?.querySelector(`[data-idx~="${jumpTo}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el?.classList.add('flash')
+    const t = setTimeout(() => el?.classList.remove('flash'), 1600)
+    return () => clearTimeout(t)
+  }, [loading, jumpTo, visibleDisplayMessages])
+
+  async function onResume(): Promise<void> {
+    const res = await api.resume(sessionId)
+    if (res.ok) {
+      setToast('Opened a new Ghostty tab ✓')
+    } else {
+      await api.copyResumeCommand(sessionId)
+      setToast(`Could not control Ghostty (${res.error ?? 'error'}). Command copied to clipboard.`)
+    }
+    setTimeout(() => setToast(''), 5000)
+  }
+
+  async function copyProjectPath(path: string): Promise<void> {
+    await navigator.clipboard.writeText(path)
+    setToast('Project path copied')
+    setTimeout(() => setToast(''), 2500)
+  }
+
+  function toggleRole(role: Role): void {
+    setRoleFilters((current) => {
+      const next = new Set(current)
+      next.has(role) ? next.delete(role) : next.add(role)
+      return next
+    })
+  }
+
+  if (loading) return <div className="transcript empty">Loading…</div>
+  if (!meta) return <div className="transcript empty">Session not found</div>
+
+  const agent = AGENT_META[meta.agent]
+
+  return (
+    <div className="transcript">
+      <header className="transcript-head">
+        <div className="th-main">
+          <span className="agent-badge" style={{ background: agent.color }}>
+            {agent.label}
+          </span>
+          <h2 title={meta.title}>{meta.title}</h2>
+        </div>
+        <div className="th-sub">
+          <span className="th-path" title={meta.cwd}>
+            {shortPath(meta.cwd) || '—'}
+          </span>
+          {meta.cwd && (
+            <button
+              className="path-copy"
+              onClick={() => void copyProjectPath(meta.cwd)}
+              title="Copy project path"
+              aria-label="Copy project path"
+            >
+              <Copy size={12} />
+            </button>
+          )}
+          <span className="th-dot">·</span>
+          <span>{meta.messageCount} msgs</span>
+          <span className="th-dot">·</span>
+          <span>{fullTime(meta.updatedAt)}</span>
+        </div>
+        <div className="th-actions">
+          <button className="btn primary" onClick={onResume}>
+            <Play size={14} /> Resume in Ghostty
+          </button>
+          <button
+            className="btn"
+            onClick={async () => {
+              await api.copyResumeCommand(sessionId)
+              setToast('Resume command copied')
+              setTimeout(() => setToast(''), 2500)
+            }}
+          >
+            Copy command
+          </button>
+        </div>
+        <div className="message-type-filter">
+          <span className="filter-label message-filter-label">Messages</span>
+          <button
+            className={`chip ${roleFilters.size === 0 ? 'on' : ''}`}
+            onClick={() => setRoleFilters(new Set())}
+            aria-pressed={roleFilters.size === 0}
+          >
+            All
+          </button>
+          {ALL_ROLES.map((role) => (
+            <button
+              key={role}
+              className={`chip ${roleFilters.has(role) ? 'on' : ''}`}
+              style={
+                roleFilters.has(role)
+                  ? { borderColor: ROLE_META[role].color, color: ROLE_META[role].color }
+                  : undefined
+              }
+              onClick={() => toggleRole(role)}
+              aria-pressed={roleFilters.has(role)}
+            >
+              {ROLE_META[role].label}
+            </button>
+          ))}
+          <span className="message-filter-count">
+            {visibleDisplayMessages.length}/{displayMessages.length}
+          </span>
+        </div>
+      </header>
+
+      <div className="transcript-scroll" ref={scrollRef}>
+        {visibleDisplayMessages.map(({ message, relatedIdxs }) => (
+          <div key={message.idx} data-idx={relatedIdxs.join(' ')}>
+            <MessageItem message={message} />
+          </div>
+        ))}
+        {messages.length === 0 && <div className="empty">No renderable messages</div>}
+        {messages.length > 0 && visibleDisplayMessages.length === 0 && (
+          <div className="empty">No messages match this filter</div>
+        )}
+      </div>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}

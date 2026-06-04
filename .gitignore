@@ -1,0 +1,6 @@
+node_modules/
+out/
+out-tsc/
+dist/
+*.log
+.DS_Store
