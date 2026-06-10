@@ -4,6 +4,7 @@ const api = {
   agentLabels: () => ipcRenderer.invoke('agents:labels'),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   getSession: (id: string) => ipcRenderer.invoke('session:get', id),
+  loadSubAgent: (sourcePath: string) => ipcRenderer.invoke('subagent:load', sourcePath),
   search: (opts: unknown) => ipcRenderer.invoke('search', opts),
   stats: () => ipcRenderer.invoke('stats'),
   resume: (id: string) => ipcRenderer.invoke('resume', id),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Folder, RefreshCw, Settings as SettingsIcon, X } from 'lucide-react'
+import { Bot, Folder, RefreshCw, Settings as SettingsIcon, X } from 'lucide-react'
 import { api } from './api'
-import type { AgentType, IndexProgress, Role, SearchHit, SessionMeta } from './types'
+import type { AgentType, IndexProgress, Role, SearchHit, SessionMeta, SubAgentMeta } from './types'
 import { AGENT_META, ROLE_META, baseName, relTime, shortPath } from './util'
 import { TranscriptView } from './components/TranscriptView'
 import { Settings } from './components/Settings'
@@ -13,6 +13,8 @@ const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'opencode', 'amp', 'pi']
 interface Selection {
   sessionId: string
   jumpTo?: number
+  /** When set, view a sub-agent transcript instead of the main session. */
+  subAgent?: SubAgentMeta
 }
 
 export default function App(): React.JSX.Element {
@@ -228,8 +230,9 @@ export default function App(): React.JSX.Element {
           ) : (
             <SessionList
               sessions={visibleSessions}
-              selectedId={selection?.sessionId}
+              selection={selection}
               onPick={(id) => setSelection({ sessionId: id })}
+              onPickSubAgent={(sessionId, sa) => setSelection({ sessionId, subAgent: sa })}
             />
           )}
         </div>
@@ -257,7 +260,17 @@ export default function App(): React.JSX.Element {
 
       <main className="main">
         {selection ? (
-          <TranscriptView sessionId={selection.sessionId} jumpTo={selection.jumpTo} />
+          <TranscriptView
+            sessionId={selection.sessionId}
+            jumpTo={selection.jumpTo}
+            subAgent={selection.subAgent}
+            onSelectSubAgent={(sa) =>
+              setSelection({ sessionId: selection.sessionId, subAgent: sa })
+            }
+            onBackToParent={() =>
+              setSelection({ sessionId: selection.sessionId })
+            }
+          />
         ) : (
           <div className="welcome">
             <h1>Agent Sessions</h1>
@@ -288,15 +301,15 @@ interface PathTip {
 
 function SessionList({
   sessions,
-  selectedId,
-  onPick
+  selection,
+  onPick,
+  onPickSubAgent
 }: {
   sessions: SessionMeta[]
-  selectedId?: string
+  selection: Selection | null
   onPick: (id: string) => void
+  onPickSubAgent: (sessionId: string, sa: SubAgentMeta) => void
 }): React.JSX.Element {
-  // The full path is shown via a fixed-position label so it can extend to the
-  // right over the transcript without reflowing the (scrollable) list.
   const [tip, setTip] = useState<PathTip | null>(null)
 
   if (sessions.length === 0) return <div className="empty pad">No sessions indexed yet.</div>
@@ -305,40 +318,65 @@ function SessionList({
       {sessions.map((s) => {
         const agent = AGENT_META[s.agent]
         const pathText = shortPath(s.cwd) || '—'
+        const isSelected = selection?.sessionId === s.id
+        const hasSubs = s.subAgents.length > 0
         return (
-          <button
-            key={s.id}
-            className={`session-card ${selectedId === s.id ? 'active' : ''}`}
-            onClick={() => onPick(s.id)}
-          >
-            <div className="sc-top">
-              <span className="sc-dot" style={{ background: agent.color }} />
-              <span className="sc-title">{s.title}</span>
-            </div>
-            <div className="sc-meta">
-              <span className="sc-agent">{agent.label}</span>
-              <span className="th-dot">·</span>
-              <span className="sc-folder">
-                <Folder size={12} className="sc-folder-icon" />
-                {baseName(s.cwd) || '—'}
-              </span>
-              <span className="sc-stats">
-                {relTime(s.updatedAt)} · {s.messageCount} msgs
-              </span>
-            </div>
-            <div
-              className="sc-meta dim sc-full-path"
-              onMouseEnter={(e) => {
-                const el = e.currentTarget
-                if (el.scrollWidth <= el.clientWidth + 1) return
-                const r = el.getBoundingClientRect()
-                setTip({ top: r.top, left: r.left, text: pathText })
-              }}
-              onMouseLeave={() => setTip(null)}
+          <div key={s.id} className="session-group">
+            <button
+              className={`session-card ${isSelected && !selection?.subAgent ? 'active' : ''}`}
+              onClick={() => onPick(s.id)}
             >
-              {pathText}
-            </div>
-          </button>
+              <div className="sc-top">
+                <span className="sc-dot" style={{ background: agent.color }} />
+                <span className="sc-title">{s.title}</span>
+              </div>
+              <div className="sc-meta">
+                <span className="sc-agent">{agent.label}</span>
+                <span className="th-dot">·</span>
+                <span className="sc-folder">
+                  <Folder size={12} className="sc-folder-icon" />
+                  {baseName(s.cwd) || '—'}
+                </span>
+                <span className="sc-stats">
+                  {relTime(s.updatedAt)} · {s.messageCount} msgs
+                </span>
+              </div>
+              {hasSubs && (
+                <div className="sc-meta dim sc-sub-count">
+                  <Bot size={12} />
+                  <span>{s.subAgents.length} sub-agent{s.subAgents.length > 1 ? 's' : ''}</span>
+                </div>
+              )}
+              <div
+                className="sc-meta dim sc-full-path"
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget
+                  if (el.scrollWidth <= el.clientWidth + 1) return
+                  const r = el.getBoundingClientRect()
+                  setTip({ top: r.top, left: r.left, text: pathText })
+                }}
+                onMouseLeave={() => setTip(null)}
+              >
+                {pathText}
+              </div>
+            </button>
+            {isSelected && hasSubs && (
+              <div className="sub-agent-list">
+                {s.subAgents.map((sa) => (
+                  <button
+                    key={sa.id}
+                    className={`sub-agent-item ${selection?.subAgent?.id === sa.id ? 'active' : ''}`}
+                    onClick={() => onPickSubAgent(s.id, sa)}
+                    title={sa.label}
+                  >
+                    <Bot size={11} className="sa-icon" />
+                    <span className="sa-label">{sa.label}</span>
+                    <span className="sa-count">{sa.messageCount}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )
       })}
       {tip && (

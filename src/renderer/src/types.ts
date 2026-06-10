@@ -20,6 +20,13 @@ export interface Message {
   model?: string
 }
 
+export interface SubAgentMeta {
+  id: string
+  label: string
+  sourcePath: string
+  messageCount: number
+}
+
 export interface SessionMeta {
   id: string
   agent: AgentType
@@ -30,6 +37,7 @@ export interface SessionMeta {
   updatedAt: number
   messageCount: number
   sourcePath: string
+  subAgents: SubAgentMeta[]
 }
 
 export interface SearchHit {

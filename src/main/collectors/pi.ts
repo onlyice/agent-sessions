@@ -116,7 +116,8 @@ export const piCollector: Collector = {
           createdAt: firstTs ?? stat.birthtimeMs,
           updatedAt: lastTs ?? stat.mtimeMs,
           messageCount: count,
-          sourcePath: path
+          sourcePath: path,
+          subAgents: []
         })
       } catch {
         /* ignore */

@@ -169,6 +169,7 @@ async function readMeta(path: string, mtime: number): Promise<SessionMeta | null
     createdAt: createdAt ?? mtime,
     updatedAt: lastTs ?? mtime,
     messageCount: count,
-    sourcePath: path
+    sourcePath: path,
+    subAgents: []
   }
 }

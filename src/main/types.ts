@@ -33,6 +33,16 @@ export interface Message {
   model?: string
 }
 
+export interface SubAgentMeta {
+  /** Agent identifier, e.g. "a0a382c8448dd22a9". */
+  id: string
+  /** Short label derived from the first user message. */
+  label: string
+  /** Absolute path to the sub-agent JSONL file. */
+  sourcePath: string
+  messageCount: number
+}
+
 export interface SessionMeta {
   /** Globally unique id: `${agent}:${nativeId}`. */
   id: string
@@ -47,6 +57,8 @@ export interface SessionMeta {
   messageCount: number
   /** Absolute path to the source file/dir on disk. */
   sourcePath: string
+  /** Sub-agent transcripts discovered under this session. */
+  subAgents: SubAgentMeta[]
 }
 
 export interface Session extends SessionMeta {

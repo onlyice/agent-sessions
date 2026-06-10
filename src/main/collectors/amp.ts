@@ -86,7 +86,8 @@ export const ampCollector: Collector = {
           createdAt: created ?? stat.birthtimeMs,
           updatedAt: lastSent ?? stat.mtimeMs,
           messageCount: msgs.length,
-          sourcePath: path
+          sourcePath: path,
+          subAgents: []
         })
       } catch {
         /* ignore */
