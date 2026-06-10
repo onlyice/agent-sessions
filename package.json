@@ -1,6 +1,6 @@
 {
   "name": "agent-session-list",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Browse, search and resume Coding Agent sessions (Claude Code, Codex, OpenCode, Pi, Amp)",
   "main": "./out/main/index.mjs",
   "author": "kevin.lin",
