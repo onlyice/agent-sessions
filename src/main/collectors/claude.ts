@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { join, basename } from 'path'
-import type { Block, Collector, Message, Role, SessionMeta } from '../types'
+import type { Block, Collector, Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { HOME, asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
 
 const ROOT = join(HOME, '.claude', 'projects')
@@ -114,6 +114,71 @@ export const claudeCollector: Collector = {
   load: parse
 }
 
+/** Discover sub-agent JSONL files under {sessionId}/subagents/. */
+async function discoverSubAgents(sessionDir: string): Promise<SubAgentMeta[]> {
+  const subagentsDir = join(sessionDir, 'subagents')
+  const results: SubAgentMeta[] = []
+
+  async function scanDir(dir: string): Promise<void> {
+    let entries: string[]
+    try {
+      entries = await fs.readdir(dir)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry)
+      if (entry.endsWith('.jsonl') && entry.startsWith('agent-')) {
+        try {
+          const meta = await readSubAgentMeta(full)
+          if (meta) results.push(meta)
+        } catch {
+          // skip unreadable
+        }
+      } else {
+        try {
+          const stat = await fs.stat(full)
+          if (stat.isDirectory()) await scanDir(full)
+        } catch {
+          // skip
+        }
+      }
+    }
+  }
+
+  await scanDir(subagentsDir)
+  return results
+}
+
+async function readSubAgentMeta(path: string): Promise<SubAgentMeta | null> {
+  const raw = await fs.readFile(path, 'utf8')
+  const events = parseJsonl(raw)
+  let firstUserText = ''
+  let count = 0
+  let agentId = ''
+
+  for (const ev of events) {
+    if (!agentId && ev.agentId) agentId = ev.agentId
+    if (ev.type === 'user' || ev.type === 'assistant') {
+      count++
+      if (!firstUserText && ev.type === 'user' && ev.message) {
+        const t = asText(ev.message.content)
+        if (t) firstUserText = t
+      }
+    }
+  }
+  if (count === 0) return null
+
+  const id = agentId || basename(path, '.jsonl').replace(/^agent-/, '')
+  return {
+    id,
+    label: deriveTitle(firstUserText, id),
+    sourcePath: path,
+    messageCount: count
+  }
+}
+
+
 /** Read lightweight metadata: scan first/last lines for cwd, sessionId, title. */
 async function readMeta(path: string, dirName: string): Promise<SessionMeta | null> {
   const raw = await fs.readFile(path, 'utf8')
@@ -146,6 +211,9 @@ async function readMeta(path: string, dirName: string): Promise<SessionMeta | nu
   if (count === 0) return null
 
   const stat = await fs.stat(path)
+  const projDir = join(ROOT, dirName)
+  const sessionDir = join(projDir, sessionId)
+  const subAgents = await discoverSubAgents(sessionDir)
   return {
     id: `claude:${sessionId}`,
     agent: 'claude',
@@ -155,6 +223,7 @@ async function readMeta(path: string, dirName: string): Promise<SessionMeta | nu
     createdAt: firstTs ?? stat.birthtimeMs,
     updatedAt: lastTs ?? stat.mtimeMs,
     messageCount: count,
-    sourcePath: path
+    sourcePath: path,
+    subAgents
   }
 }

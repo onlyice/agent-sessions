@@ -35,6 +35,15 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     return cmd
   })
 
+  ipcMain.handle('subagent:load', async (_e, sourcePath: string) => {
+    try {
+      const messages = await collectors.claude.load(sourcePath)
+      return { messages }
+    } catch {
+      return { messages: [] }
+    }
+  })
+
   ipcMain.handle('reindex', async () => {
     const result = await reindex(db, (p) => {
       getWindow()?.webContents.send('reindex:progress', p)

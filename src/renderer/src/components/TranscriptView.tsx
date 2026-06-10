@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Play } from 'lucide-react'
+import { ArrowLeft, Bot, Copy, Play } from 'lucide-react'
 import { api } from '../api'
-import type { Message, Role, SessionMeta } from '../types'
+import type { Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { AGENT_META, ROLE_META, fullTime, shortPath } from '../util'
 import { MessageItem } from './MessageItem'
 
@@ -9,6 +9,10 @@ interface Props {
   sessionId: string
   /** Optional message index to scroll to (from a search hit). */
   jumpTo?: number
+  /** When set, display this sub-agent's transcript instead of the main session. */
+  subAgent?: SubAgentMeta
+  onSelectSubAgent?: (sa: SubAgentMeta) => void
+  onBackToParent?: () => void
 }
 
 interface DisplayMessage {
@@ -74,7 +78,13 @@ function mergeAdjacentToolMessages(messages: Message[]): DisplayMessage[] {
   return out
 }
 
-export function TranscriptView({ sessionId, jumpTo }: Props): React.JSX.Element {
+export function TranscriptView({
+  sessionId,
+  jumpTo,
+  subAgent,
+  onSelectSubAgent,
+  onBackToParent
+}: Props): React.JSX.Element {
   const [meta, setMeta] = useState<SessionMeta | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [roleFilters, setRoleFilters] = useState<Set<Role>>(new Set())
@@ -91,16 +101,28 @@ export function TranscriptView({ sessionId, jumpTo }: Props): React.JSX.Element 
   useEffect(() => {
     let alive = true
     setLoading(true)
-    api.getSession(sessionId).then((res) => {
-      if (!alive) return
-      setMeta(res?.meta ?? null)
-      setMessages(res?.messages ?? [])
-      setLoading(false)
-    })
+    if (subAgent) {
+      api.getSession(sessionId).then((sessionRes) => {
+        if (!alive) return
+        setMeta(sessionRes?.meta ?? null)
+      })
+      api.loadSubAgent(subAgent.sourcePath).then((res) => {
+        if (!alive) return
+        setMessages(res?.messages ?? [])
+        setLoading(false)
+      })
+    } else {
+      api.getSession(sessionId).then((res) => {
+        if (!alive) return
+        setMeta(res?.meta ?? null)
+        setMessages(res?.messages ?? [])
+        setLoading(false)
+      })
+    }
     return () => {
       alive = false
     }
-  }, [sessionId])
+  }, [sessionId, subAgent])
 
   useEffect(() => {
     if (loading || jumpTo == null) return
@@ -140,15 +162,28 @@ export function TranscriptView({ sessionId, jumpTo }: Props): React.JSX.Element 
   if (!meta) return <div className="transcript empty">Session not found</div>
 
   const agent = AGENT_META[meta.agent]
+  const hasSubs = meta.subAgents.length > 0
 
   return (
     <div className="transcript">
       <header className="transcript-head">
+        {subAgent && (
+          <div className="th-back">
+            <button className="btn btn-back" onClick={onBackToParent}>
+              <ArrowLeft size={14} /> Back to main session
+            </button>
+            <span className="th-sub-label" title={subAgent.label}>
+              <Bot size={13} /> {subAgent.label}
+            </span>
+          </div>
+        )}
         <div className="th-main">
           <span className="agent-badge" style={{ background: agent.color }}>
             {agent.label}
           </span>
-          <h2 title={meta.title}>{meta.title}</h2>
+          <h2 title={subAgent ? subAgent.label : meta.title}>
+            {subAgent ? subAgent.label : meta.title}
+          </h2>
         </div>
         <div className="th-sub">
           <span className="th-path" title={meta.cwd}>
@@ -165,25 +200,45 @@ export function TranscriptView({ sessionId, jumpTo }: Props): React.JSX.Element 
             </button>
           )}
           <span className="th-dot">·</span>
-          <span>{meta.messageCount} msgs</span>
+          <span>{subAgent ? subAgent.messageCount : meta.messageCount} msgs</span>
           <span className="th-dot">·</span>
           <span>{fullTime(meta.updatedAt)}</span>
         </div>
-        <div className="th-actions">
-          <button className="btn primary" onClick={onResume}>
-            <Play size={14} /> Resume in Ghostty
-          </button>
-          <button
-            className="btn"
-            onClick={async () => {
-              await api.copyResumeCommand(sessionId)
-              setToast('Resume command copied')
-              setTimeout(() => setToast(''), 2500)
-            }}
-          >
-            Copy command
-          </button>
-        </div>
+        {!subAgent && (
+          <div className="th-actions">
+            <button className="btn primary" onClick={onResume}>
+              <Play size={14} /> Resume in Ghostty
+            </button>
+            <button
+              className="btn"
+              onClick={async () => {
+                await api.copyResumeCommand(sessionId)
+                setToast('Resume command copied')
+                setTimeout(() => setToast(''), 2500)
+              }}
+            >
+              Copy command
+            </button>
+          </div>
+        )}
+        {hasSubs && (
+          <div className="th-subagents">
+            <span className="filter-label message-filter-label">
+              <Bot size={13} /> Sub-agents
+            </span>
+            {meta.subAgents.map((sa) => (
+              <button
+                key={sa.id}
+                className={`chip sub-agent-chip ${subAgent?.id === sa.id ? 'on' : ''}`}
+                onClick={() => onSelectSubAgent?.(sa)}
+                title={sa.label}
+              >
+                {sa.label.length > 40 ? sa.label.slice(0, 40) + '…' : sa.label}
+                <span className="sa-chip-count">{sa.messageCount}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="message-type-filter">
           <span className="filter-label message-filter-label">Messages</span>
           <button

@@ -18,6 +18,7 @@ interface Api {
   agentLabels(): Promise<Record<AgentType, string>>
   listSessions(): Promise<SessionMeta[]>
   getSession(id: string): Promise<{ meta: SessionMeta; messages: Message[] } | null>
+  loadSubAgent(sourcePath: string): Promise<{ messages: Message[] }>
   search(opts: SearchOptions): Promise<SearchHit[]>
   stats(): Promise<{ sessions: number; messages: number }>
   resume(id: string): Promise<{ ok: boolean; command: string; error?: string }>

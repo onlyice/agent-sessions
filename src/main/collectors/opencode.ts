@@ -135,7 +135,8 @@ export const opencodeCollector: Collector = {
           createdAt: toMillis(s.time?.created) ?? Date.now(),
           updatedAt: toMillis(s.time?.updated) ?? toMillis(s.time?.created) ?? Date.now(),
           messageCount: msgCount,
-          sourcePath: path
+          sourcePath: path,
+          subAgents: []
         })
       }
     }

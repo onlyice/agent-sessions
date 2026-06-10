@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import type { Message, Role, SessionMeta } from './types'
+import type { Message, Role, SessionMeta, SubAgentMeta } from './types'
 
 export interface SearchHit {
   sessionId: string
@@ -42,11 +42,24 @@ export class IndexDB {
         updatedAt   INTEGER NOT NULL,
         messageCount INTEGER NOT NULL,
         sourcePath  TEXT NOT NULL,
-        mtime       INTEGER NOT NULL
+        mtime       INTEGER NOT NULL,
+        subAgents   TEXT NOT NULL DEFAULT '[]'
       );
 
       CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updatedAt DESC);
+    `)
 
+    // Migration: add subAgents column if missing (existing DBs).
+    const cols = this.db
+      .prepare("PRAGMA table_info('sessions')")
+      .all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'subAgents')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN subAgents TEXT NOT NULL DEFAULT '[]'")
+      // Force full reindex so existing sessions pick up sub-agent metadata.
+      this.db.exec('UPDATE sessions SET mtime = 0')
+    }
+
+    this.db.exec(`
       -- Trigram tokenizer => case-insensitive substring search that also works
       -- for CJK text (the default unicode61 tokenizer can't segment Chinese).
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -81,8 +94,8 @@ export class IndexDB {
   upsertSession(meta: SessionMeta, mtime: number, messages: Message[]): void {
     const insertSession = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime)
-      VALUES (@id, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime)
+        (id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime, subAgents)
+      VALUES (@id, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime, @subAgents)
     `)
     const insertMsg = this.db.prepare(`
       INSERT INTO messages_fts (text, sessionId, idx, role, timestamp)
@@ -90,7 +103,7 @@ export class IndexDB {
     `)
     const tx = this.db.transaction(() => {
       this.db.prepare('DELETE FROM messages_fts WHERE sessionId = ?').run(meta.id)
-      insertSession.run({ ...meta, mtime })
+      insertSession.run({ ...meta, mtime, subAgents: JSON.stringify(meta.subAgents ?? []) })
       for (const m of messages) {
         if (!m.text) continue
         insertMsg.run(m.text, meta.id, m.idx, m.role, m.timestamp)
@@ -100,21 +113,23 @@ export class IndexDB {
   }
 
   listSessions(): SessionMeta[] {
-    return this.db
+    const rows = this.db
       .prepare(
-        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath
+        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
          FROM sessions ORDER BY updatedAt DESC`
       )
-      .all() as SessionMeta[]
+      .all() as (Omit<SessionMeta, 'subAgents'> & { subAgents: string })[]
+    return rows.map(parseSubAgents)
   }
 
   getSession(id: string): SessionMeta | undefined {
-    return this.db
+    const row = this.db
       .prepare(
-        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath
+        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
          FROM sessions WHERE id = ?`
       )
-      .get(id) as SessionMeta | undefined
+      .get(id) as (Omit<SessionMeta, 'subAgents'> & { subAgents: string }) | undefined
+    return row ? parseSubAgents(row) : undefined
   }
 
   search(opts: SearchOptions): SearchHit[] {
@@ -219,6 +234,18 @@ function ftsQuery(q: string): string {
 /** Escape LIKE wildcards in a user term (used with ESCAPE '\'). */
 function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, '\\$&')
+}
+
+function parseSubAgents(
+  row: Omit<SessionMeta, 'subAgents'> & { subAgents: string }
+): SessionMeta {
+  let subAgents: SubAgentMeta[] = []
+  try {
+    subAgents = JSON.parse(row.subAgents)
+  } catch {
+    // ignore
+  }
+  return { ...row, subAgents }
 }
 
 /** Center a ~160-char window around the first match and wrap it in «». */
