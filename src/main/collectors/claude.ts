@@ -114,10 +114,49 @@ export const claudeCollector: Collector = {
   load: parse
 }
 
+/** Build agentId→label map from workflow JSON files under {sessionDir}/workflows/. */
+async function loadWorkflowLabels(sessionDir: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  const workflowsDir = join(sessionDir, 'workflows')
+  let files: string[]
+  try {
+    files = (await fs.readdir(workflowsDir)).filter((f) => f.endsWith('.json'))
+  } catch {
+    return map
+  }
+  for (const file of files) {
+    try {
+      const raw = await fs.readFile(join(workflowsDir, file), 'utf8')
+      const wf = JSON.parse(raw)
+      if (!Array.isArray(wf.workflowProgress)) continue
+      for (const entry of wf.workflowProgress) {
+        if (entry.type === 'workflow_agent' && entry.agentId && entry.label) {
+          map.set(entry.agentId, entry.label)
+        }
+      }
+    } catch {
+      // skip unreadable
+    }
+  }
+  return map
+}
+
+/** Read the companion .meta.json for a sub-agent JSONL (if it exists). */
+async function readCompanionMeta(jsonlPath: string): Promise<{ description?: string } | null> {
+  const metaPath = jsonlPath.replace(/\.jsonl$/, '.meta.json')
+  try {
+    const raw = await fs.readFile(metaPath, 'utf8')
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
 /** Discover sub-agent JSONL files under {sessionId}/subagents/. */
 async function discoverSubAgents(sessionDir: string): Promise<SubAgentMeta[]> {
   const subagentsDir = join(sessionDir, 'subagents')
   const results: SubAgentMeta[] = []
+  const workflowLabels = await loadWorkflowLabels(sessionDir)
 
   async function scanDir(dir: string): Promise<void> {
     let entries: string[]
@@ -130,7 +169,7 @@ async function discoverSubAgents(sessionDir: string): Promise<SubAgentMeta[]> {
       const full = join(dir, entry)
       if (entry.endsWith('.jsonl') && entry.startsWith('agent-')) {
         try {
-          const meta = await readSubAgentMeta(full)
+          const meta = await readSubAgentMeta(full, workflowLabels)
           if (meta) results.push(meta)
         } catch {
           // skip unreadable
@@ -150,7 +189,10 @@ async function discoverSubAgents(sessionDir: string): Promise<SubAgentMeta[]> {
   return results
 }
 
-async function readSubAgentMeta(path: string): Promise<SubAgentMeta | null> {
+async function readSubAgentMeta(
+  path: string,
+  workflowLabels: Map<string, string>
+): Promise<SubAgentMeta | null> {
   const raw = await fs.readFile(path, 'utf8')
   const events = parseJsonl(raw)
   let firstUserText = ''
@@ -170,12 +212,20 @@ async function readSubAgentMeta(path: string): Promise<SubAgentMeta | null> {
   if (count === 0) return null
 
   const id = agentId || basename(path, '.jsonl').replace(/^agent-/, '')
-  return {
-    id,
-    label: deriveTitle(firstUserText, id),
-    sourcePath: path,
-    messageCount: count
+
+  // Priority: .meta.json description > workflow label > prompt-derived text
+  let label = ''
+  const companion = await readCompanionMeta(path)
+  if (companion?.description) {
+    label = companion.description
+  } else if (workflowLabels.has(id)) {
+    label = workflowLabels.get(id)!
   }
+  if (!label) {
+    label = deriveTitle(firstUserText, id)
+  }
+
+  return { id, label, sourcePath: path, messageCount: count }
 }
 
 
