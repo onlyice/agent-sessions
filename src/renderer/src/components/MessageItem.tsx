@@ -32,11 +32,13 @@ function fieldRows(value: unknown, text: string): number {
 function ToolValueField({ name, value }: { name: string; value: unknown }): React.JSX.Element {
   const isText = typeof value === 'string'
   const text = formatToolValue(value)
+  const isMultilineText = isText && text.includes('\n')
+  const shouldUseTextarea = isMultilineText || isRecord(value) || Array.isArray(value)
 
   return (
     <label className="tool-field">
       <span className="tool-field-name">{name}</span>
-      {isText || isRecord(value) || Array.isArray(value) ? (
+      {shouldUseTextarea ? (
         <textarea
           className="tool-field-value multi"
           readOnly
