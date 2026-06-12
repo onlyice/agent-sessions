@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { X } from 'lucide-react'
 import { THEMES } from '../themes'
 import {
@@ -35,6 +36,17 @@ export function Settings({
   onClose: () => void
 }): React.JSX.Element {
   const resolved = resolveMode(settings.mode)
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   return (
     <div className="settings-overlay" onClick={onClose}>
