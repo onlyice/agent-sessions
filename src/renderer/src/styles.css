@@ -690,6 +690,8 @@ textarea {
   flex: 1;
   overflow-y: auto;
   padding: 16px 0 80px;
+  will-change: scroll-position;
+  contain: content;
 }
 
 /* ---------- Messages ---------- */
