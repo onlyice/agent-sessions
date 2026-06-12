@@ -92,6 +92,7 @@ export function TranscriptView({
   const [toast, setToast] = useState<string>('')
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [currentMatch, setCurrentMatch] = useState(0)
   const [totalMatches, setTotalMatches] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -152,6 +153,12 @@ export function TranscriptView({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Debounce the search query to avoid expensive DOM walks on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 200)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
   // Walk the DOM and build highlight ranges via CSS Custom Highlight API
   useEffect(() => {
     if (!CSS.highlights) return
@@ -159,12 +166,12 @@ export function TranscriptView({
     CSS.highlights.delete('transcript-search-current')
     matchRangesRef.current = []
 
-    if (!searchQuery.trim() || !scrollRef.current) {
+    if (!debouncedQuery.trim() || !scrollRef.current) {
       setTotalMatches(0)
       return
     }
 
-    const q = searchQuery.toLowerCase()
+    const q = debouncedQuery.toLowerCase()
     const ranges: Range[] = []
     const walker = document.createTreeWalker(scrollRef.current, NodeFilter.SHOW_TEXT)
 
@@ -187,10 +194,13 @@ export function TranscriptView({
     setTotalMatches(ranges.length)
     setCurrentMatch((prev) => (ranges.length > 0 ? Math.min(prev, ranges.length - 1) : 0))
 
+    // Cap highlighted ranges to avoid browser paint stalls on short queries
+    const MAX_HIGHLIGHTS = 500
     if (ranges.length > 0) {
-      CSS.highlights.set('transcript-search', new Highlight(...ranges))
+      const toHighlight = ranges.length <= MAX_HIGHLIGHTS ? ranges : ranges.slice(0, MAX_HIGHLIGHTS)
+      CSS.highlights.set('transcript-search', new Highlight(...toHighlight))
     }
-  }, [searchQuery, visibleDisplayMessages])
+  }, [debouncedQuery, visibleDisplayMessages])
 
   // Highlight + scroll to the current match
   useEffect(() => {
@@ -223,6 +233,7 @@ export function TranscriptView({
   const closeSearch = useCallback((): void => {
     setShowSearch(false)
     setSearchQuery('')
+    setDebouncedQuery('')
   }, [])
 
   const goToMatch = useCallback(
