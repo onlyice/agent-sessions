@@ -861,7 +861,7 @@ textarea {
   margin-bottom: 0;
 }
 .md p {
-  margin: 0.5em 0;
+  margin: 0.8em 0;
 }
 .md h1,
 .md h2,
@@ -869,7 +869,7 @@ textarea {
 .md h4,
 .md h5,
 .md h6 {
-  margin: 1em 0 0.5em;
+  margin: 1.2em 0 0.6em;
   line-height: 1.3;
   font-weight: 600;
 }
@@ -889,7 +889,7 @@ textarea {
 }
 .md ul,
 .md ol {
-  margin: 0.5em 0;
+  margin: 0.8em 0;
   padding-left: 1.5em;
 }
 .md li {
@@ -918,7 +918,7 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 10px 12px;
-  margin: 0.6em 0;
+  margin: 1em 0;
   overflow: auto;
   max-height: 420px;
 }
@@ -930,7 +930,7 @@ textarea {
   white-space: pre;
 }
 .md blockquote {
-  margin: 0.6em 0;
+  margin: 1em 0;
   padding: 0.1em 0.9em;
   border-left: 3px solid var(--border);
   color: var(--text-dim);
@@ -942,7 +942,7 @@ textarea {
 }
 .md table {
   border-collapse: collapse;
-  margin: 0.6em 0;
+  margin: 1em 0;
   font-size: 0.95em;
 }
 .md th,
