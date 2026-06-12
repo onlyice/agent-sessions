@@ -618,6 +618,74 @@ textarea {
   filter: brightness(1.08);
 }
 
+/* ---------- In-transcript search bar ---------- */
+.transcript-search-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.ts-icon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+.ts-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 10px;
+  font-size: 14.4px;
+  outline: none;
+}
+.ts-input:focus {
+  border-color: var(--accent);
+}
+.ts-count {
+  flex-shrink: 0;
+  font-size: 12.6px;
+  font-family: var(--code-font);
+  color: var(--text-dim);
+  min-width: 60px;
+  text-align: center;
+}
+.ts-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ts-nav:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+.ts-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+::highlight(transcript-search) {
+  background: var(--mark);
+  color: var(--mark-text);
+}
+::highlight(transcript-search-current) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 .transcript-scroll {
   flex: 1;
   overflow-y: auto;

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Bot, Copy, Play } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Bot, ChevronDown, ChevronUp, Copy, Play, Search, X } from 'lucide-react'
 import { api } from '../api'
 import type { Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { AGENT_META, ROLE_META, fullTime, shortPath } from '../util'
@@ -90,7 +90,13 @@ export function TranscriptView({
   const [roleFilters, setRoleFilters] = useState<Set<Role>>(new Set())
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string>('')
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [currentMatch, setCurrentMatch] = useState(0)
+  const [totalMatches, setTotalMatches] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const matchRangesRef = useRef<Range[]>([])
 
   const displayMessages = useMemo(() => mergeAdjacentToolMessages(messages), [messages])
   const visibleDisplayMessages = useMemo(() => {
@@ -132,6 +138,102 @@ export function TranscriptView({
     const t = setTimeout(() => el?.classList.remove('flash'), 1600)
     return () => clearTimeout(t)
   }, [loading, jumpTo, visibleDisplayMessages])
+
+  // Cmd+F to open search
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowSearch(true)
+        setTimeout(() => searchInputRef.current?.focus(), 0)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Walk the DOM and build highlight ranges via CSS Custom Highlight API
+  useEffect(() => {
+    if (!CSS.highlights) return
+    CSS.highlights.delete('transcript-search')
+    CSS.highlights.delete('transcript-search-current')
+    matchRangesRef.current = []
+
+    if (!searchQuery.trim() || !scrollRef.current) {
+      setTotalMatches(0)
+      return
+    }
+
+    const q = searchQuery.toLowerCase()
+    const ranges: Range[] = []
+    const walker = document.createTreeWalker(scrollRef.current, NodeFilter.SHOW_TEXT)
+
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      const text = node.textContent?.toLowerCase() ?? ''
+      let start = 0
+      for (;;) {
+        const idx = text.indexOf(q, start)
+        if (idx === -1) break
+        const range = new Range()
+        range.setStart(node, idx)
+        range.setEnd(node, idx + q.length)
+        ranges.push(range)
+        start = idx + q.length
+      }
+    }
+
+    matchRangesRef.current = ranges
+    setTotalMatches(ranges.length)
+    setCurrentMatch((prev) => (ranges.length > 0 ? Math.min(prev, ranges.length - 1) : 0))
+
+    if (ranges.length > 0) {
+      CSS.highlights.set('transcript-search', new Highlight(...ranges))
+    }
+  }, [searchQuery, visibleDisplayMessages])
+
+  // Highlight + scroll to the current match
+  useEffect(() => {
+    if (!CSS.highlights) return
+    CSS.highlights.delete('transcript-search-current')
+
+    const ranges = matchRangesRef.current
+    if (ranges.length === 0 || currentMatch >= ranges.length) return
+
+    const range = ranges[currentMatch]
+    CSS.highlights.set('transcript-search-current', new Highlight(range))
+
+    const el = range.startContainer.parentElement
+    if (!el || !scrollRef.current) return
+    const cr = scrollRef.current.getBoundingClientRect()
+    const er = el.getBoundingClientRect()
+    if (er.top < cr.top || er.bottom > cr.bottom) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [currentMatch, totalMatches])
+
+  // Clean up highlights on unmount
+  useEffect(() => {
+    return () => {
+      CSS.highlights?.delete('transcript-search')
+      CSS.highlights?.delete('transcript-search-current')
+    }
+  }, [])
+
+  const closeSearch = useCallback((): void => {
+    setShowSearch(false)
+    setSearchQuery('')
+  }, [])
+
+  const goToMatch = useCallback(
+    (delta: number): void => {
+      setCurrentMatch((prev) => {
+        if (totalMatches === 0) return 0
+        return (prev + delta + totalMatches) % totalMatches
+      })
+    },
+    [totalMatches]
+  )
 
   async function onResume(): Promise<void> {
     const res = await api.resume(sessionId)
@@ -268,6 +370,54 @@ export function TranscriptView({
           </span>
         </div>
       </header>
+
+      {showSearch && (
+        <div className="transcript-search-bar">
+          <Search size={14} className="ts-icon" />
+          <input
+            ref={searchInputRef}
+            className="ts-input"
+            placeholder="Search in transcript…"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value)
+              setCurrentMatch(0)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                goToMatch(e.shiftKey ? -1 : 1)
+              }
+              if (e.key === 'Escape') closeSearch()
+            }}
+            autoFocus
+          />
+          {searchQuery && (
+            <span className="ts-count">
+              {totalMatches > 0 ? `${currentMatch + 1}/${totalMatches}` : 'No matches'}
+            </span>
+          )}
+          <button
+            className="ts-nav"
+            onClick={() => goToMatch(-1)}
+            disabled={totalMatches === 0}
+            title="Previous match (Shift+Enter)"
+          >
+            <ChevronUp size={15} />
+          </button>
+          <button
+            className="ts-nav"
+            onClick={() => goToMatch(1)}
+            disabled={totalMatches === 0}
+            title="Next match (Enter)"
+          >
+            <ChevronDown size={15} />
+          </button>
+          <button className="ts-nav" onClick={closeSearch} title="Close (Esc)">
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       <div className="transcript-scroll" ref={scrollRef}>
         {visibleDisplayMessages.map(({ message, relatedIdxs }) => (
