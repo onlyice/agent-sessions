@@ -14,6 +14,7 @@ const api = {
   pickVaultDir: () => ipcRenderer.invoke('vaults:pickDir'),
   addVault: (home: string, name: string) => ipcRenderer.invoke('vaults:add', home, name),
   removeVault: (id: string) => ipcRenderer.invoke('vaults:remove', id),
+  renameVault: (id: string, name: string) => ipcRenderer.invoke('vaults:rename', id, name),
   setActiveVault: (id: string) => ipcRenderer.invoke('vaults:setActive', id),
   onReindexProgress: (cb: (p: unknown) => void) => {
     const handler = (_e: unknown, p: unknown): void => cb(p)

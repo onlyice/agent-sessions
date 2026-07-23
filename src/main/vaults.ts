@@ -28,9 +28,12 @@ let cache: VaultConfig | null = null
 
 function normalize(raw: Partial<VaultConfig> | null): VaultConfig {
   const vaults = Array.isArray(raw?.vaults) ? raw!.vaults.filter((v) => v && v.id && v.home) : []
-  // The built-in local vault is always present, always first, always up to date.
+  // The built-in local vault is always present, always first, with a fixed home
+  // and non-removable — but its display name may be user-renamed, so keep that.
   const rest = vaults.filter((v) => v.id !== DEFAULT_VAULT_ID)
-  const all = [defaultVault(), ...rest]
+  const saved = vaults.find((v) => v.id === DEFAULT_VAULT_ID)
+  const def: Vault = { ...defaultVault(), name: saved?.name?.trim() || 'Home' }
+  const all = [def, ...rest]
   let activeVaultId = raw?.activeVaultId ?? DEFAULT_VAULT_ID
   if (!all.some((v) => v.id === activeVaultId)) activeVaultId = DEFAULT_VAULT_ID
   return { vaults: all, activeVaultId }
@@ -130,6 +133,17 @@ export async function addVault(home: string, name?: string): Promise<AddVaultRes
   const next: VaultConfig = { vaults: [...config.vaults, vault], activeVaultId: config.activeVaultId }
   await persist(next)
   return { config: next, vault }
+}
+
+/** Rename any vault (including the built-in Home). No reindex needed. */
+export async function renameVault(id: string, name: string): Promise<VaultConfig> {
+  const config = await load()
+  const trimmed = name.trim()
+  if (!trimmed) return config
+  const vaults = config.vaults.map((v) => (v.id === id ? { ...v, name: trimmed } : v))
+  const next: VaultConfig = { vaults, activeVaultId: config.activeVaultId }
+  await persist(next)
+  return next
 }
 
 /**

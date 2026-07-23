@@ -10,6 +10,7 @@ import {
   getConfig,
   getVaults,
   removeVault,
+  renameVault,
   setActiveVault,
   suggestVaultName
 } from './vaults'
@@ -103,6 +104,8 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     db.removeVaultSessions(id)
     return config
   })
+
+  ipcMain.handle('vaults:rename', (_e, id: string, name: string) => renameVault(id, name))
 
   ipcMain.handle('vaults:setActive', (_e, id: string) => setActiveVault(id))
 }

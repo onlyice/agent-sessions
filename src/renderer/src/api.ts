@@ -32,6 +32,7 @@ interface Api {
   /** Add a vault at `home` under `name`; returns the updated config or an error. */
   addVault(home: string, name: string): Promise<{ config?: VaultConfig; error?: string }>
   removeVault(id: string): Promise<VaultConfig>
+  renameVault(id: string, name: string): Promise<VaultConfig>
   setActiveVault(id: string): Promise<VaultConfig>
   onReindexProgress(cb: (p: IndexProgress) => void): () => void
 }
