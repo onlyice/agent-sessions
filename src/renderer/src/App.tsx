@@ -140,6 +140,11 @@ export default function App(): React.JSX.Element {
     return null
   }, [])
 
+  const renameVault = useCallback(async (id: string, name: string): Promise<void> => {
+    const cfg = await api.renameVault(id, name)
+    setVaults(cfg.vaults)
+  }, [])
+
   const removeVault = useCallback(
     async (id: string): Promise<void> => {
       const cfg = await api.removeVault(id)
@@ -366,6 +371,7 @@ export default function App(): React.JSX.Element {
           onPickVaultDir={pickVaultDir}
           onAddVault={addVault}
           onRemoveVault={removeVault}
+          onRenameVault={renameVault}
           onSwitchVault={switchVault}
         />
       )}

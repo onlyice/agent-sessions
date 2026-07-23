@@ -1410,6 +1410,7 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.vault-row-edit,
 .vault-row-remove {
   flex-shrink: 0;
   background: transparent;
@@ -1421,9 +1422,18 @@ textarea {
   display: inline-flex;
   align-items: center;
 }
+.vault-row-edit:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 .vault-row-remove:hover {
   background: rgba(229, 72, 77, 0.14);
   color: #e5484d;
+}
+.vault-row.editing {
+  padding: 10px 12px;
+  gap: 8px;
+  align-items: center;
 }
 .vault-row-badge {
   flex-shrink: 0;

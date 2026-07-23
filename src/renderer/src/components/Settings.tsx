@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, FolderPlus, Trash2, X } from 'lucide-react'
+import { Check, FolderPlus, Pencil, Trash2, X } from 'lucide-react'
 import { THEMES } from '../themes'
 import {
   CODE_FONTS,
@@ -36,6 +36,7 @@ export function Settings({
   onPickVaultDir,
   onAddVault,
   onRemoveVault,
+  onRenameVault,
   onSwitchVault
 }: {
   settings: Settings
@@ -51,6 +52,7 @@ export function Settings({
   }>
   onAddVault: (home: string, name: string) => Promise<string | null>
   onRemoveVault: (id: string) => Promise<void>
+  onRenameVault: (id: string, name: string) => Promise<void>
   onSwitchVault: (id: string) => Promise<void>
 }): React.JSX.Element {
   const resolved = resolveMode(settings.mode)
@@ -59,6 +61,23 @@ export function Settings({
   // After a directory is picked, hold it here so the user can name the vault.
   const [pending, setPending] = useState<{ home: string } | null>(null)
   const [pendingName, setPendingName] = useState('')
+  // Inline rename of an existing vault.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+
+  const startEdit = (v: Vault): void => {
+    setVaultError(null)
+    setEditingId(v.id)
+    setEditingName(v.name)
+  }
+  const cancelEdit = (): void => {
+    setEditingId(null)
+    setEditingName('')
+  }
+  const commitEdit = async (): Promise<void> => {
+    if (editingId && editingName.trim()) await onRenameVault(editingId, editingName)
+    cancelEdit()
+  }
 
   const handlePick = async (): Promise<void> => {
     setVaultError(null)
@@ -175,37 +194,73 @@ export function Settings({
               </div>
             )}
             <div className="vault-list">
-              {vaults.map((v) => (
-                <div
-                  key={v.id}
-                  className={`vault-row ${v.id === activeVaultId ? 'active' : ''}`}
-                >
-                  <button
-                    className="vault-row-main"
-                    onClick={() => void onSwitchVault(v.id)}
-                    title={v.id === activeVaultId ? 'Current vault' : 'Switch to this vault'}
-                  >
-                    <span className="vault-row-check">
-                      {v.id === activeVaultId && <Check size={15} />}
-                    </span>
-                    <span className="vault-row-body">
-                      <span className="vault-row-name">{v.name}</span>
-                      <span className="vault-row-path">{v.home}</span>
-                    </span>
-                  </button>
-                  {v.removable ? (
+              {vaults.map((v) =>
+                editingId === v.id ? (
+                  <div key={v.id} className="vault-row editing">
+                    <input
+                      className="vault-name-input"
+                      value={editingName}
+                      autoFocus
+                      placeholder="Vault name"
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void commitEdit()
+                        if (e.key === 'Escape') {
+                          e.stopPropagation() // don't let it close the settings panel
+                          cancelEdit()
+                        }
+                      }}
+                    />
                     <button
-                      className="vault-row-remove"
-                      onClick={() => void onRemoveVault(v.id)}
-                      title="Remove vault"
+                      className="vault-form-btn primary"
+                      onClick={() => void commitEdit()}
+                      disabled={!editingName.trim()}
                     >
-                      <Trash2 size={15} />
+                      Save
                     </button>
-                  ) : (
-                    <span className="vault-row-badge">built-in</span>
-                  )}
-                </div>
-              ))}
+                    <button className="vault-form-btn" onClick={cancelEdit}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    key={v.id}
+                    className={`vault-row ${v.id === activeVaultId ? 'active' : ''}`}
+                  >
+                    <button
+                      className="vault-row-main"
+                      onClick={() => void onSwitchVault(v.id)}
+                      title={v.id === activeVaultId ? 'Current vault' : 'Switch to this vault'}
+                    >
+                      <span className="vault-row-check">
+                        {v.id === activeVaultId && <Check size={15} />}
+                      </span>
+                      <span className="vault-row-body">
+                        <span className="vault-row-name">{v.name}</span>
+                        <span className="vault-row-path">{v.home}</span>
+                      </span>
+                    </button>
+                    <button
+                      className="vault-row-edit"
+                      onClick={() => startEdit(v)}
+                      title="Rename vault"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    {v.removable ? (
+                      <button
+                        className="vault-row-remove"
+                        onClick={() => void onRemoveVault(v.id)}
+                        title="Remove vault"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    ) : (
+                      <span className="vault-row-badge">built-in</span>
+                    )}
+                  </div>
+                )
+              )}
             </div>
           </section>
 
