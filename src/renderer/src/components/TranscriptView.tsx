@@ -60,13 +60,18 @@ function mergeAdjacentToolMessages(messages: Message[]): DisplayMessage[] {
     if (next) {
       const input = current.blocks[0]
       const output = next.blocks[0]
+      const durationMs =
+        current.timestamp != null && next.timestamp != null
+          ? next.timestamp - current.timestamp
+          : undefined
       out.push({
         message: {
           ...current,
           role: 'tool',
           text: [current.text, next.text].filter(Boolean).join('\n'),
           blocks: [input, { ...output, toolName: output.toolName ?? input.toolName }],
-          timestamp: current.timestamp ?? next.timestamp
+          timestamp: current.timestamp ?? next.timestamp,
+          toolDurationMs: durationMs != null && durationMs >= 0 ? durationMs : undefined
         },
         relatedIdxs: [current.idx, next.idx]
       })

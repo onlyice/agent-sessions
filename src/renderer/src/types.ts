@@ -18,6 +18,8 @@ export interface Message {
   blocks: Block[]
   timestamp: number | null
   model?: string
+  /** For merged tool messages: elapsed time between the call and its result, in ms. */
+  toolDurationMs?: number
 }
 
 export interface SubAgentMeta {

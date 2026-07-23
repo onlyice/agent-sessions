@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code, FileText, Image, Paperclip } from 'lucide-react'
 import type { Block, Message } from '../types'
-import { fullTime, messageLabel } from '../util'
+import { formatDuration, fullTime, messageLabel } from '../util'
 import { Markdown } from './Markdown'
 
 type TextView = 'markdown' | 'source'
@@ -193,6 +193,11 @@ export function MessageItem({ message }: { message: Message }): React.JSX.Elemen
           {label.label}
         </span>
         {message.timestamp && <span className="msg-time">{fullTime(message.timestamp)}</span>}
+        {message.toolDurationMs != null && (
+          <span className="msg-duration" title="Tool execution time">
+            {formatDuration(message.toolDurationMs)}
+          </span>
+        )}
       </div>
       <div className="msg-body">
         {hasText && (
