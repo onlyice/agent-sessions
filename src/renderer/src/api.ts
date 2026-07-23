@@ -4,7 +4,9 @@ import type {
   Message,
   Role,
   SearchHit,
-  SessionMeta
+  SessionMeta,
+  Vault,
+  VaultConfig
 } from './types'
 
 interface SearchOptions {
@@ -24,8 +26,15 @@ interface Api {
   resume(id: string): Promise<{ ok: boolean; command: string; error?: string }>
   copyResumeCommand(id: string): Promise<string>
   reindex(): Promise<{ sessions: number; messages: number }>
+  listVaults(): Promise<VaultConfig>
+  /** Opens a native folder picker; returns the updated config, an error, or a cancel flag. */
+  addVault(): Promise<{ config?: VaultConfig; error?: string; canceled?: boolean }>
+  removeVault(id: string): Promise<VaultConfig>
+  setActiveVault(id: string): Promise<VaultConfig>
   onReindexProgress(cb: (p: IndexProgress) => void): () => void
 }
+
+export type { Vault, VaultConfig }
 
 export const api = (window as unknown as { api: Api }).api
 export type { SearchOptions }

@@ -1,9 +1,9 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Block, Collector, Message, Role, SessionMeta } from '../types'
-import { HOME, asText, deriveTitle, flatten, toMillis, truncate } from './util'
+import { asText, deriveTitle, flatten, toMillis, truncate } from './util'
 
-const ROOT = join(HOME, '.local', 'share', 'amp', 'threads')
+const rootFor = (home: string): string => join(home, '.local', 'share', 'amp', 'threads')
 
 function blocksFromAmp(content: any): Block[] {
   if (typeof content === 'string') return content.trim() ? [{ kind: 'text', text: content }] : []
@@ -19,11 +19,11 @@ function blocksFromAmp(content: any): Block[] {
         if (c.thinking) blocks.push({ kind: 'thinking', text: c.thinking })
         break
       case 'tool_use':
-        blocks.push({ kind: 'tool_use', toolName: c.name, toolInput: c.input })
+        blocks.push({ kind: 'tool_use', toolName: c.name, toolCallId: c.id, toolInput: c.input })
         break
       case 'tool_result': {
         const text = asText(c.content ?? c.run?.content ?? c.output)
-        blocks.push({ kind: 'tool_result', text, isError: c.isError || c.is_error })
+        blocks.push({ kind: 'tool_result', toolCallId: c.tool_use_id, text, isError: c.isError || c.is_error })
         break
       }
       default:
@@ -56,16 +56,17 @@ function parseThread(thread: any): Message[] {
 export const ampCollector: Collector = {
   agent: 'amp',
 
-  async list(): Promise<SessionMeta[]> {
+  async list(home: string): Promise<SessionMeta[]> {
+    const root = rootFor(home)
     let files: string[]
     try {
-      files = (await fs.readdir(ROOT)).filter((f) => f.endsWith('.json'))
+      files = (await fs.readdir(root)).filter((f) => f.endsWith('.json'))
     } catch {
       return []
     }
     const out: SessionMeta[] = []
     for (const file of files) {
-      const path = join(ROOT, file)
+      const path = join(root, file)
       try {
         const thread = JSON.parse(await fs.readFile(path, 'utf8'))
         const msgs = thread.messages ?? []
@@ -79,6 +80,7 @@ export const ampCollector: Collector = {
         const cwd = thread.env?.initialWorkingDirectory ?? thread.env?.cwd ?? ''
         out.push({
           id: `amp:${thread.id}`,
+          vaultId: '',
           agent: 'amp',
           nativeId: thread.id,
           cwd,

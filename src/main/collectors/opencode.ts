@@ -1,12 +1,13 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Block, Collector, Message, Role, SessionMeta } from '../types'
-import { HOME, deriveTitle, flatten, stringify, toMillis, truncate } from './util'
+import { deriveTitle, flatten, stringify, toMillis, truncate } from './util'
 
-const ROOT = join(HOME, '.local', 'share', 'opencode', 'storage')
-const SESSION_DIR = join(ROOT, 'session')
-const MESSAGE_DIR = join(ROOT, 'message')
-const PART_DIR = join(ROOT, 'part')
+const storageFor = (home: string): string =>
+  join(home, '.local', 'share', 'opencode', 'storage')
+const sessionDir = (storage: string): string => join(storage, 'session')
+const messageDir = (storage: string): string => join(storage, 'message')
+const partDir = (storage: string): string => join(storage, 'part')
 
 async function readJson<T = any>(path: string): Promise<T | null> {
   try {
@@ -71,7 +72,9 @@ async function parse(sessionPath: string): Promise<Message[]> {
   // sessionPath is the session json; derive sessionID from its content.
   const session = await readJson(sessionPath)
   if (!session?.id) return []
-  const msgDir = join(MESSAGE_DIR, session.id)
+  // sessionPath = <storage>/session/<proj>/<file>.json => storage is 3 levels up.
+  const storage = join(sessionPath, '..', '..', '..')
+  const msgDir = join(messageDir(storage), session.id)
   const msgFiles = await listFiles(msgDir)
   const rawMessages = (
     await Promise.all(msgFiles.map((f) => readJson(join(msgDir, f))))
@@ -80,10 +83,11 @@ async function parse(sessionPath: string): Promise<Message[]> {
 
   const messages: Message[] = []
   let idx = 0
+  const partsRoot = partDir(storage)
   for (const m of rawMessages) {
-    const partFiles = await listFiles(join(PART_DIR, m.id))
+    const partFiles = await listFiles(join(partsRoot, m.id))
     const parts = (
-      await Promise.all(partFiles.map((f) => readJson(join(PART_DIR, m.id, f))))
+      await Promise.all(partFiles.map((f) => readJson(join(partsRoot, m.id, f))))
     ).filter(Boolean) as any[]
     parts.sort(byId)
 
@@ -109,25 +113,29 @@ async function parse(sessionPath: string): Promise<Message[]> {
 export const opencodeCollector: Collector = {
   agent: 'opencode',
 
-  async list(): Promise<SessionMeta[]> {
+  async list(home: string): Promise<SessionMeta[]> {
+    const storage = storageFor(home)
+    const sessRoot = sessionDir(storage)
+    const msgRoot = messageDir(storage)
     let projectDirs: string[]
     try {
-      projectDirs = await fs.readdir(SESSION_DIR)
+      projectDirs = await fs.readdir(sessRoot)
     } catch {
       return []
     }
     const out: SessionMeta[] = []
     for (const proj of projectDirs) {
-      const dir = join(SESSION_DIR, proj)
+      const dir = join(sessRoot, proj)
       for (const file of await listFiles(dir)) {
         const path = join(dir, file)
         const s = await readJson(path)
         if (!s?.id) continue
         // messageCount: count files in the message dir (cheap, no parse).
-        const msgCount = (await listFiles(join(MESSAGE_DIR, s.id))).length
+        const msgCount = (await listFiles(join(msgRoot, s.id))).length
         if (msgCount === 0) continue
         out.push({
           id: `opencode:${s.id}`,
+          vaultId: '',
           agent: 'opencode',
           nativeId: s.id,
           cwd: s.directory ?? '',

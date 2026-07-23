@@ -1,9 +1,9 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Block, Collector, Message, Role, SessionMeta } from '../types'
-import { HOME, asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
+import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
 
-const ROOT = join(HOME, '.pi', 'agent', 'sessions')
+const rootFor = (home: string): string => join(home, '.pi', 'agent', 'sessions')
 
 function blocksFromPi(content: any): Block[] {
   if (typeof content === 'string') return content.trim() ? [{ kind: 'text', text: content }] : []
@@ -75,9 +75,9 @@ async function walk(dir: string, acc: string[]): Promise<void> {
 export const piCollector: Collector = {
   agent: 'pi',
 
-  async list(): Promise<SessionMeta[]> {
+  async list(home: string): Promise<SessionMeta[]> {
     const files: string[] = []
-    await walk(ROOT, files)
+    await walk(rootFor(home), files)
     const out: SessionMeta[] = []
     for (const path of files) {
       try {
@@ -109,6 +109,7 @@ export const piCollector: Collector = {
         if (count === 0) continue
         out.push({
           id: `pi:${id}`,
+          vaultId: '',
           agent: 'pi',
           nativeId: id,
           cwd,

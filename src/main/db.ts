@@ -17,6 +17,8 @@ export interface SearchOptions {
   query: string
   roles?: Role[]
   agents?: string[]
+  /** Restrict results to a single vault. */
+  vaultId?: string
   limit?: number
 }
 
@@ -34,6 +36,7 @@ export class IndexDB {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id          TEXT PRIMARY KEY,
+        vaultId     TEXT NOT NULL DEFAULT 'default',
         agent       TEXT NOT NULL,
         nativeId    TEXT NOT NULL,
         cwd         TEXT NOT NULL,
@@ -49,15 +52,27 @@ export class IndexDB {
       CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updatedAt DESC);
     `)
 
-    // Migration: add subAgents column if missing (existing DBs).
     const cols = this.db
       .prepare("PRAGMA table_info('sessions')")
       .all() as { name: string }[]
+
+    // Migration: add subAgents column if missing (existing DBs).
     if (!cols.some((c) => c.name === 'subAgents')) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN subAgents TEXT NOT NULL DEFAULT '[]'")
       // Force full reindex so existing sessions pick up sub-agent metadata.
       this.db.exec('UPDATE sessions SET mtime = 0')
     }
+
+    // Migration: add vaultId column if missing. Pre-vault rows all belong to the
+    // built-in 'default' vault (which mirrors HOME), so the default is correct.
+    // The next reindex rewrites ids to the `${vaultId}:…` scheme and prunes the
+    // old un-prefixed rows within the default scope — no full wipe needed.
+    if (!cols.some((c) => c.name === 'vaultId')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN vaultId TEXT NOT NULL DEFAULT 'default'")
+    }
+
+    // Created after the migration above so the column is guaranteed to exist.
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_vault ON sessions(vaultId)')
 
     this.db.exec(`
       -- Trigram tokenizer => case-insensitive substring search that also works
@@ -73,9 +88,11 @@ export class IndexDB {
     `)
   }
 
-  /** Returns a map of sessionId -> mtime for everything currently indexed. */
-  indexedMtimes(): Map<string, number> {
-    const rows = this.db.prepare('SELECT id, mtime FROM sessions').all() as {
+  /** Returns a map of sessionId -> mtime for everything indexed in a vault. */
+  indexedMtimes(vaultId: string): Map<string, number> {
+    const rows = this.db
+      .prepare('SELECT id, mtime FROM sessions WHERE vaultId = ?')
+      .all(vaultId) as {
       id: string
       mtime: number
     }[]
@@ -90,12 +107,25 @@ export class IndexDB {
     tx(id)
   }
 
+  /** Remove every session (and its indexed messages) belonging to a vault. */
+  removeVaultSessions(vaultId: string): void {
+    const tx = this.db.transaction((vid: string) => {
+      const ids = this.db
+        .prepare('SELECT id FROM sessions WHERE vaultId = ?')
+        .all(vid) as { id: string }[]
+      const delMsg = this.db.prepare('DELETE FROM messages_fts WHERE sessionId = ?')
+      for (const { id } of ids) delMsg.run(id)
+      this.db.prepare('DELETE FROM sessions WHERE vaultId = ?').run(vid)
+    })
+    tx(vaultId)
+  }
+
   /** Insert or replace a session and all of its messages atomically. */
   upsertSession(meta: SessionMeta, mtime: number, messages: Message[]): void {
     const insertSession = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime, subAgents)
-      VALUES (@id, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime, @subAgents)
+        (id, vaultId, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime, subAgents)
+      VALUES (@id, @vaultId, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime, @subAgents)
     `)
     const insertMsg = this.db.prepare(`
       INSERT INTO messages_fts (text, sessionId, idx, role, timestamp)
@@ -112,20 +142,20 @@ export class IndexDB {
     tx()
   }
 
-  listSessions(): SessionMeta[] {
+  listSessions(vaultId: string): SessionMeta[] {
     const rows = this.db
       .prepare(
-        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
-         FROM sessions ORDER BY updatedAt DESC`
+        `SELECT id, vaultId, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
+         FROM sessions WHERE vaultId = ? ORDER BY updatedAt DESC`
       )
-      .all() as (Omit<SessionMeta, 'subAgents'> & { subAgents: string })[]
+      .all(vaultId) as (Omit<SessionMeta, 'subAgents'> & { subAgents: string })[]
     return rows.map(parseSubAgents)
   }
 
   getSession(id: string): SessionMeta | undefined {
     const row = this.db
       .prepare(
-        `SELECT id, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
+        `SELECT id, vaultId, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, subAgents
          FROM sessions WHERE id = ?`
       )
       .get(id) as (Omit<SessionMeta, 'subAgents'> & { subAgents: string }) | undefined
@@ -145,6 +175,10 @@ export class IndexDB {
     const where: string[] = ['messages_fts MATCH ?']
     const params: unknown[] = [ftsQuery(q)]
 
+    if (opts.vaultId) {
+      where.push('s.vaultId = ?')
+      params.push(opts.vaultId)
+    }
     if (opts.roles?.length) {
       where.push(`role IN (${opts.roles.map(() => '?').join(',')})`)
       params.push(...opts.roles)
@@ -189,6 +223,10 @@ export class IndexDB {
     for (const t of terms) {
       where.push('f.text LIKE ? ESCAPE ?')
       params.push(`%${escapeLike(t)}%`, '\\')
+    }
+    if (opts.vaultId) {
+      where.push('s.vaultId = ?')
+      params.push(opts.vaultId)
     }
     if (opts.roles?.length) {
       where.push(`f.role IN (${opts.roles.map(() => '?').join(',')})`)

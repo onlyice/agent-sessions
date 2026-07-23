@@ -31,6 +31,7 @@ export interface SubAgentMeta {
 
 export interface SessionMeta {
   id: string
+  vaultId: string
   agent: AgentType
   nativeId: string
   cwd: string
@@ -52,6 +53,18 @@ export interface SearchHit {
   timestamp: number | null
   snippet: string
   updatedAt: number
+}
+
+export interface Vault {
+  id: string
+  name: string
+  home: string
+  removable: boolean
+}
+
+export interface VaultConfig {
+  vaults: Vault[]
+  activeVaultId: string
 }
 
 export interface IndexProgress {
