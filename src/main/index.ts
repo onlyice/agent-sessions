@@ -3,6 +3,7 @@ import { join } from 'path'
 import { IndexDB } from './db'
 import { registerIpc } from './ipc'
 import { reindex } from './indexer'
+import { getVaults } from './vaults'
 
 let mainWindow: BrowserWindow | null = null
 let db: IndexDB | null = null
@@ -45,10 +46,15 @@ app.whenReady().then(() => {
   createWindow()
 
   // Build/refresh the index in the background after the window is up.
-  mainWindow?.webContents.once('did-finish-load', () => {
-    reindex(db!, (p) => mainWindow?.webContents.send('reindex:progress', p))
-      .then((stats) => console.log('[reindex] done', JSON.stringify(stats)))
-      .catch((err) => console.error('[reindex] failed:', err))
+  mainWindow?.webContents.once('did-finish-load', async () => {
+    try {
+      const stats = await reindex(db!, await getVaults(), (p) =>
+        mainWindow?.webContents.send('reindex:progress', p)
+      )
+      console.log('[reindex] done', JSON.stringify(stats))
+    } catch (err) {
+      console.error('[reindex] failed:', err)
+    }
   })
 
   app.on('activate', () => {

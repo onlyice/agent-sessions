@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Folder, RefreshCw, Settings as SettingsIcon, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, Folder, RefreshCw, Settings as SettingsIcon, X } from 'lucide-react'
 import { api } from './api'
-import type { AgentType, IndexProgress, Role, SearchHit, SessionMeta, SubAgentMeta } from './types'
+import type {
+  AgentType,
+  IndexProgress,
+  Role,
+  SearchHit,
+  SessionMeta,
+  SubAgentMeta,
+  Vault
+} from './types'
 import { AGENT_META, ROLE_META, baseName, relTime, shortPath } from './util'
 import { TranscriptView } from './components/TranscriptView'
 import { Settings } from './components/Settings'
@@ -27,6 +35,9 @@ export default function App(): React.JSX.Element {
   const [progress, setProgress] = useState<IndexProgress | null>(null)
   const [searching, setSearching] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [vaults, setVaults] = useState<Vault[]>([])
+  const [activeVaultId, setActiveVaultId] = useState('default')
+  const [vaultMenuOpen, setVaultMenuOpen] = useState(false)
   const [settings, setSettings] = useSettings()
   // Sidebar width is stored as a fraction of the window so it scales
   // proportionally when the window itself is resized.
@@ -91,10 +102,60 @@ export default function App(): React.JSX.Element {
     window.addEventListener('mouseup', onUp)
   }
 
-  async function refresh(): Promise<void> {
+  const refresh = useCallback(async (): Promise<void> => {
     const list = await api.listSessions()
     setSessions(list)
-  }
+  }, [])
+
+  const loadVaults = useCallback(async (): Promise<void> => {
+    const cfg = await api.listVaults()
+    setVaults(cfg.vaults)
+    setActiveVaultId(cfg.activeVaultId)
+  }, [])
+
+  const switchVault = useCallback(
+    async (id: string): Promise<void> => {
+      setVaultMenuOpen(false)
+      if (id === activeVaultId) return
+      const cfg = await api.setActiveVault(id)
+      setActiveVaultId(cfg.activeVaultId)
+      // A vault switch changes the whole result set: drop the current view.
+      setSelection(null)
+      setQuery('')
+      setHits(null)
+      await refresh()
+    },
+    [activeVaultId, refresh]
+  )
+
+  const addVault = useCallback(async (): Promise<string | null> => {
+    const res = await api.addVault()
+    if (res.canceled) return null
+    if (res.error) return res.error
+    if (res.config) {
+      setVaults(res.config.vaults)
+      setActiveVaultId(res.config.activeVaultId)
+    }
+    return null
+  }, [])
+
+  const removeVault = useCallback(
+    async (id: string): Promise<void> => {
+      const cfg = await api.removeVault(id)
+      setVaults(cfg.vaults)
+      setActiveVaultId(cfg.activeVaultId)
+      // The removed vault's sessions are gone; if it was active, reload the list.
+      setSelection(null)
+      setHits(null)
+      setQuery('')
+      await refresh()
+    },
+    [refresh]
+  )
+
+  useEffect(() => {
+    void loadVaults()
+  }, [loadVaults])
 
   useEffect(() => {
     refresh()
@@ -110,7 +171,7 @@ export default function App(): React.JSX.Element {
       }
     })
     return off
-  }, [scheduleReindex])
+  }, [scheduleReindex, refresh])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -175,6 +236,18 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       <aside className="sidebar" style={{ width: `${(sidebarFrac * 100).toFixed(3)}%` }}>
+        <VaultSwitcher
+          vaults={vaults}
+          activeVaultId={activeVaultId}
+          open={vaultMenuOpen}
+          onToggle={() => setVaultMenuOpen((v) => !v)}
+          onClose={() => setVaultMenuOpen(false)}
+          onPick={switchVault}
+          onManage={() => {
+            setVaultMenuOpen(false)
+            setShowSettings(true)
+          }}
+        />
         <div className="search-area">
           <div className="search-row">
             <input
@@ -287,6 +360,11 @@ export default function App(): React.JSX.Element {
           settings={settings}
           onChange={setSettings}
           onClose={() => setShowSettings(false)}
+          vaults={vaults}
+          activeVaultId={activeVaultId}
+          onAddVault={addVault}
+          onRemoveVault={removeVault}
+          onSwitchVault={switchVault}
         />
       )}
     </div>
@@ -433,6 +511,56 @@ function SearchResults({
         )
       })}
     </>
+  )
+}
+
+function VaultSwitcher({
+  vaults,
+  activeVaultId,
+  open,
+  onToggle,
+  onClose,
+  onPick,
+  onManage
+}: {
+  vaults: Vault[]
+  activeVaultId: string
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onPick: (id: string) => void
+  onManage: () => void
+}): React.JSX.Element {
+  const active = vaults.find((v) => v.id === activeVaultId)
+  return (
+    <div className="vault-switcher">
+      <button className="vault-btn" onClick={onToggle} title={active?.home}>
+        <Folder size={15} className="vault-btn-icon" />
+        <span className="vault-btn-name">{active?.name ?? 'Home'}</span>
+        <ChevronDown size={16} className={`vault-btn-chev ${open ? 'open' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <div className="vault-menu-backdrop" onClick={onClose} />
+          <div className="vault-menu">
+            {vaults.map((v) => (
+              <button key={v.id} className="vault-menu-item" onClick={() => onPick(v.id)} title={v.home}>
+                <span className="vmi-check">{v.id === activeVaultId && <Check size={15} />}</span>
+                <span className="vmi-body">
+                  <span className="vmi-name">{v.name}</span>
+                  <span className="vmi-path">{v.home}</span>
+                </span>
+              </button>
+            ))}
+            <div className="vault-menu-sep" />
+            <button className="vault-menu-item manage" onClick={onManage}>
+              <span className="vmi-check" />
+              <span className="vmi-name">Manage vaults…</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

@@ -10,6 +10,10 @@ const api = {
   resume: (id: string) => ipcRenderer.invoke('resume', id),
   copyResumeCommand: (id: string) => ipcRenderer.invoke('resume:command', id),
   reindex: () => ipcRenderer.invoke('reindex'),
+  listVaults: () => ipcRenderer.invoke('vaults:list'),
+  addVault: () => ipcRenderer.invoke('vaults:add'),
+  removeVault: (id: string) => ipcRenderer.invoke('vaults:remove', id),
+  setActiveVault: (id: string) => ipcRenderer.invoke('vaults:setActive', id),
   onReindexProgress: (cb: (p: unknown) => void) => {
     const handler = (_e: unknown, p: unknown): void => cb(p)
     ipcRenderer.on('reindex:progress', handler)

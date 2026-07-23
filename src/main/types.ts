@@ -46,8 +46,13 @@ export interface SubAgentMeta {
 }
 
 export interface SessionMeta {
-  /** Globally unique id: `${agent}:${nativeId}`. */
+  /**
+   * Globally unique id. Collectors emit `${agent}:${nativeId}`; the indexer
+   * prefixes it with the owning vault id => `${vaultId}:${agent}:${nativeId}`.
+   */
   id: string
+  /** Vault this session belongs to. Assigned by the indexer before upsert. */
+  vaultId: string
   agent: AgentType
   /** Native session/thread id used by the agent's resume command. */
   nativeId: string
@@ -67,10 +72,31 @@ export interface Session extends SessionMeta {
   messages: Message[]
 }
 
+/** A data source: a home directory the collectors resolve their paths under. */
+export interface Vault {
+  /** Stable id. The built-in local vault is always `'default'`. */
+  id: string
+  /** Display name. */
+  name: string
+  /** Absolute path to the home directory (contains `.claude`, `.codex`, …). */
+  home: string
+  /** Built-in vaults (the local Home) can't be removed. */
+  removable: boolean
+}
+
+export interface VaultConfig {
+  vaults: Vault[]
+  activeVaultId: string
+}
+
 export interface Collector {
   agent: AgentType
-  /** Quick scan: return session metadata without loading full transcripts. */
-  list(): Promise<SessionMeta[]>
+  /**
+   * Quick scan: return session metadata without loading full transcripts.
+   * `home` is the vault's home directory the agent's data dir lives under.
+   * Emitted ids are `${agent}:${nativeId}`; the indexer adds the vault prefix.
+   */
+  list(home: string): Promise<SessionMeta[]>
   /** Load the full transcript for one session by its source path. */
   load(sourcePath: string): Promise<Message[]>
 }

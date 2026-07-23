@@ -1,9 +1,9 @@
 import { promises as fs } from 'fs'
 import { join, basename } from 'path'
 import type { Block, Collector, Message, Role, SessionMeta, SubAgentMeta } from '../types'
-import { HOME, asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
+import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
 
-const ROOT = join(HOME, '.claude', 'projects')
+const rootFor = (home: string): string => join(home, '.claude', 'projects')
 
 /** Claude encodes the cwd into the project dir name by replacing / with -. */
 function decodeCwd(dirName: string): string {
@@ -30,11 +30,11 @@ function blocksFromClaude(message: any): Block[] {
         if (c.thinking) blocks.push({ kind: 'thinking', text: c.thinking })
         break
       case 'tool_use':
-        blocks.push({ kind: 'tool_use', toolName: c.name, toolInput: c.input })
+        blocks.push({ kind: 'tool_use', toolName: c.name, toolCallId: c.id, toolInput: c.input })
         break
       case 'tool_result': {
         const text = asText(c.content)
-        blocks.push({ kind: 'tool_result', text, isError: !!c.is_error })
+        blocks.push({ kind: 'tool_result', toolCallId: c.tool_use_id, text, isError: !!c.is_error })
         break
       }
       case 'image':
@@ -80,16 +80,17 @@ async function parse(path: string): Promise<Message[]> {
 export const claudeCollector: Collector = {
   agent: 'claude',
 
-  async list(): Promise<SessionMeta[]> {
+  async list(home: string): Promise<SessionMeta[]> {
+    const root = rootFor(home)
     let projectDirs: string[]
     try {
-      projectDirs = await fs.readdir(ROOT)
+      projectDirs = await fs.readdir(root)
     } catch {
       return []
     }
     const out: SessionMeta[] = []
     for (const dir of projectDirs) {
-      const projDir = join(ROOT, dir)
+      const projDir = join(root, dir)
       let files: string[]
       try {
         files = (await fs.readdir(projDir)).filter((f) => f.endsWith('.jsonl'))
@@ -101,7 +102,7 @@ export const claudeCollector: Collector = {
         try {
           const stat = await fs.stat(path)
           if (stat.size === 0) continue
-          const meta = await readMeta(path, dir)
+          const meta = await readMeta(path, dir, root)
           if (meta) out.push(meta)
         } catch {
           // ignore unreadable file
@@ -230,7 +231,7 @@ async function readSubAgentMeta(
 
 
 /** Read lightweight metadata: scan first/last lines for cwd, sessionId, title. */
-async function readMeta(path: string, dirName: string): Promise<SessionMeta | null> {
+async function readMeta(path: string, dirName: string, root: string): Promise<SessionMeta | null> {
   const raw = await fs.readFile(path, 'utf8')
   const events = parseJsonl(raw)
   if (events.length === 0) return null
@@ -261,11 +262,12 @@ async function readMeta(path: string, dirName: string): Promise<SessionMeta | nu
   if (count === 0) return null
 
   const stat = await fs.stat(path)
-  const projDir = join(ROOT, dirName)
+  const projDir = join(root, dirName)
   const sessionDir = join(projDir, sessionId)
   const subAgents = await discoverSubAgents(sessionDir)
   return {
     id: `claude:${sessionId}`,
+    vaultId: '',
     agent: 'claude',
     nativeId: sessionId,
     cwd: cwd || decodeCwd(dirName),

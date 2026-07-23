@@ -89,13 +89,135 @@ textarea {
 .search-area {
   flex: 0 0 auto;
   overflow-y: auto;
-  padding: 14px 12px 8px;
-  padding-top: 38px; /* room for traffic-light inset titlebar */
+  padding: 12px 12px 8px;
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
 }
 .search-area > * {
   -webkit-app-region: no-drag;
+}
+
+/* Vault switcher sits at the very top; the generous top padding drops the button
+   well below the macOS traffic-light row, so no left inset is needed. */
+.vault-switcher {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 46px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+.vault-switcher > * {
+  -webkit-app-region: no-drag;
+}
+.vault-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14.5px;
+}
+.vault-btn:hover {
+  background: var(--bg-hover);
+}
+.vault-btn-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.vault-btn-name {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.vault-btn-chev {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.vault-btn-chev.open {
+  transform: rotate(180deg);
+}
+.vault-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.vault-menu {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% - 4px);
+  left: 12px;
+  right: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.vault-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.vault-menu-item:hover {
+  background: var(--bg-hover);
+}
+.vmi-check {
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vmi-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.vmi-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vmi-path {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vault-menu-item.manage .vmi-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.vault-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
 }
 
 .search-row {
@@ -728,6 +850,17 @@ textarea {
   font-size: 12px;
   color: var(--text-faint);
 }
+.msg-duration {
+  align-self: flex-end;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  background: var(--surface-2, rgba(250, 173, 20, 0.12));
+  border: 1px solid rgba(250, 173, 20, 0.35);
+  border-radius: 4px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
 .msg-body {
   min-width: 0;
   position: relative;
@@ -1107,6 +1240,138 @@ textarea {
   letter-spacing: 0.05em;
   color: var(--text-faint);
   font-weight: 600;
+}
+
+.settings-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-hint {
+  font-size: 13.5px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin: -2px 0 2px;
+}
+.settings-hint code {
+  font-family: var(--code-font);
+  font-size: 12.5px;
+}
+.vault-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.vault-add-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.vault-add-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.vault-error {
+  font-size: 13.5px;
+  color: #e5484d;
+  background: rgba(229, 72, 77, 0.12);
+  border: 1px solid rgba(229, 72, 77, 0.3);
+  border-radius: 6px;
+  padding: 7px 9px;
+  line-height: 1.45;
+}
+.vault-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.vault-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.vault-row.active {
+  border-color: var(--accent);
+}
+.vault-row-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.vault-row-main:hover {
+  background: var(--bg-hover);
+}
+.vault-row-check {
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vault-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.vault-row-name {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vault-row-path {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vault-row-remove {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.vault-row-remove:hover {
+  background: rgba(229, 72, 77, 0.14);
+  color: #e5484d;
+}
+.vault-row-badge {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 0 11px;
 }
 
 .seg {

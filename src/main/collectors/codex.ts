@@ -1,9 +1,9 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Block, Collector, Message, Role, SessionMeta } from '../types'
-import { HOME, deriveTitle, flatten, parseJsonl, stringify, toMillis, truncate } from './util'
+import { deriveTitle, flatten, parseJsonl, stringify, toMillis, truncate } from './util'
 
-const ROOT = join(HOME, '.codex', 'sessions')
+const rootFor = (home: string): string => join(home, '.codex', 'sessions')
 
 /** Recursively collect rollout-*.jsonl files under the year/month/day tree. */
 async function walk(dir: string, acc: string[]): Promise<void> {
@@ -108,9 +108,9 @@ async function parse(path: string): Promise<Message[]> {
 export const codexCollector: Collector = {
   agent: 'codex',
 
-  async list(): Promise<SessionMeta[]> {
+  async list(home: string): Promise<SessionMeta[]> {
     const files: string[] = []
-    await walk(ROOT, files)
+    await walk(rootFor(home), files)
     const out: SessionMeta[] = []
     for (const path of files) {
       try {
@@ -162,6 +162,7 @@ async function readMeta(path: string, mtime: number): Promise<SessionMeta | null
 
   return {
     id: `codex:${id}`,
+    vaultId: '',
     agent: 'codex',
     nativeId: id,
     cwd,

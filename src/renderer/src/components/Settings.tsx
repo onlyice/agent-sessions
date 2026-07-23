@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, FolderPlus, Trash2, X } from 'lucide-react'
 import { THEMES } from '../themes'
 import {
   CODE_FONTS,
@@ -8,6 +8,7 @@ import {
   type Settings,
   type ThemeMode
 } from '../settings'
+import type { Vault } from '../types'
 import { Markdown } from './Markdown'
 
 const MODES: { id: ThemeMode; label: string }[] = [
@@ -29,13 +30,36 @@ const greet = (name: string) => \`Hello, \${name}\`
 export function Settings({
   settings,
   onChange,
-  onClose
+  onClose,
+  vaults,
+  activeVaultId,
+  onAddVault,
+  onRemoveVault,
+  onSwitchVault
 }: {
   settings: Settings
   onChange: (s: Settings) => void
   onClose: () => void
+  vaults: Vault[]
+  activeVaultId: string
+  onAddVault: () => Promise<string | null>
+  onRemoveVault: (id: string) => Promise<void>
+  onSwitchVault: (id: string) => Promise<void>
 }): React.JSX.Element {
   const resolved = resolveMode(settings.mode)
+  const [vaultError, setVaultError] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+
+  const handleAdd = async (): Promise<void> => {
+    setVaultError(null)
+    setAdding(true)
+    try {
+      const err = await onAddVault()
+      if (err) setVaultError(err)
+    } finally {
+      setAdding(false)
+    }
+  }
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -59,6 +83,55 @@ export function Settings({
         </header>
 
         <div className="settings-body">
+          <section className="settings-section">
+            <div className="settings-label-row">
+              <label className="settings-label">Vaults</label>
+              <button className="vault-add-btn" onClick={handleAdd} disabled={adding}>
+                <FolderPlus size={15} />
+                {adding ? 'Adding…' : 'Add vault…'}
+              </button>
+            </div>
+            <p className="settings-hint">
+              A vault is a home directory the transcripts are read from (containing
+              <code> .claude</code>, <code>.codex</code>, <code>.local/share/opencode</code>…). Only one
+              vault is shown at a time.
+            </p>
+            {vaultError && <div className="vault-error">{vaultError}</div>}
+            <div className="vault-list">
+              {vaults.map((v) => (
+                <div
+                  key={v.id}
+                  className={`vault-row ${v.id === activeVaultId ? 'active' : ''}`}
+                >
+                  <button
+                    className="vault-row-main"
+                    onClick={() => void onSwitchVault(v.id)}
+                    title={v.id === activeVaultId ? 'Current vault' : 'Switch to this vault'}
+                  >
+                    <span className="vault-row-check">
+                      {v.id === activeVaultId && <Check size={15} />}
+                    </span>
+                    <span className="vault-row-body">
+                      <span className="vault-row-name">{v.name}</span>
+                      <span className="vault-row-path">{v.home}</span>
+                    </span>
+                  </button>
+                  {v.removable ? (
+                    <button
+                      className="vault-row-remove"
+                      onClick={() => void onRemoveVault(v.id)}
+                      title="Remove vault"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  ) : (
+                    <span className="vault-row-badge">built-in</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+
           <section className="settings-section">
             <label className="settings-label">Appearance</label>
             <div className="seg">
