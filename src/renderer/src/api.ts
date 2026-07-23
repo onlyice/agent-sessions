@@ -27,8 +27,10 @@ interface Api {
   copyResumeCommand(id: string): Promise<string>
   reindex(): Promise<{ sessions: number; messages: number }>
   listVaults(): Promise<VaultConfig>
-  /** Opens a native folder picker; returns the updated config, an error, or a cancel flag. */
-  addVault(): Promise<{ config?: VaultConfig; error?: string; canceled?: boolean }>
+  /** Opens a native folder picker; returns the validated home + a suggested name, an error, or a cancel flag. */
+  pickVaultDir(): Promise<{ home?: string; suggestedName?: string; error?: string; canceled?: boolean }>
+  /** Add a vault at `home` under `name`; returns the updated config or an error. */
+  addVault(home: string, name: string): Promise<{ config?: VaultConfig; error?: string }>
   removeVault(id: string): Promise<VaultConfig>
   setActiveVault(id: string): Promise<VaultConfig>
   onReindexProgress(cb: (p: IndexProgress) => void): () => void

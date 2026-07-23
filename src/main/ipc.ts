@@ -5,11 +5,13 @@ import { reindex } from './indexer'
 import { buildResumeCommand, resumeInGhostty } from './resume'
 import {
   addVault,
+  checkHome,
   getActiveVaultId,
   getConfig,
   getVaults,
   removeVault,
-  setActiveVault
+  setActiveVault,
+  suggestVaultName
 } from './vaults'
 import type { AgentType } from './types'
 
@@ -65,7 +67,8 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
 
   ipcMain.handle('vaults:list', () => getConfig())
 
-  ipcMain.handle('vaults:add', async () => {
+  // Step 1: pick + validate a home directory, returning a suggested name.
+  ipcMain.handle('vaults:pickDir', async () => {
     const win = getWindow()
     const opts = {
       title: 'Add vault — pick a home directory',
@@ -76,7 +79,15 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
       : await dialog.showOpenDialog(opts)
     if (res.canceled || res.filePaths.length === 0) return { canceled: true }
 
-    const result = await addVault(res.filePaths[0])
+    const home = res.filePaths[0]
+    const error = await checkHome(home)
+    if (error) return { error }
+    return { home, suggestedName: suggestVaultName(home) }
+  })
+
+  // Step 2: add the vault under a (possibly user-edited) name and index it.
+  ipcMain.handle('vaults:add', async (_e, home: string, name: string) => {
+    const result = await addVault(home, name)
     if (result.error) return { error: result.error }
 
     // Index the newly added vault in the background; the UI refreshes on 'done'.

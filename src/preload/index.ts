@@ -11,7 +11,8 @@ const api = {
   copyResumeCommand: (id: string) => ipcRenderer.invoke('resume:command', id),
   reindex: () => ipcRenderer.invoke('reindex'),
   listVaults: () => ipcRenderer.invoke('vaults:list'),
-  addVault: () => ipcRenderer.invoke('vaults:add'),
+  pickVaultDir: () => ipcRenderer.invoke('vaults:pickDir'),
+  addVault: (home: string, name: string) => ipcRenderer.invoke('vaults:add', home, name),
   removeVault: (id: string) => ipcRenderer.invoke('vaults:remove', id),
   setActiveVault: (id: string) => ipcRenderer.invoke('vaults:setActive', id),
   onReindexProgress: (cb: (p: unknown) => void) => {
