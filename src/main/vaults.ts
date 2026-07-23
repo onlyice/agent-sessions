@@ -78,6 +78,31 @@ export function detectAgents(dir: string): AgentType[] {
   )
 }
 
+/**
+ * Suggest a display name from a home path:
+ *   …/winarsita.sotyaji@shopee.com/home  =>  winarsita.sotyaji
+ * A generic `home` wrapper carries no identity, so fall back to its parent; an
+ * email-like segment (user@domain) is reduced to its local part.
+ */
+export function suggestVaultName(home: string): string {
+  const parts = home.replace(/\/+$/, '').split('/').filter(Boolean)
+  let seg = parts[parts.length - 1] ?? home
+  if (/^home$/i.test(seg) && parts.length >= 2) seg = parts[parts.length - 2]
+  const at = seg.indexOf('@')
+  if (at > 0) seg = seg.slice(0, at)
+  return seg || basename(home) || home
+}
+
+/** Validate a candidate home dir against the current config. Returns an error, or null. */
+export async function checkHome(home: string): Promise<string | null> {
+  const config = await load()
+  if (config.vaults.some((v) => v.home === home)) return '该目录已经是一个 vault'
+  if (detectAgents(home).length === 0) {
+    return '该目录下未发现任何 agent 会话数据（.claude / .codex / .local/share/opencode 等）'
+  }
+  return null
+}
+
 export async function setActiveVault(id: string): Promise<VaultConfig> {
   const config = await load()
   if (config.vaults.some((v) => v.id === id)) {
@@ -92,16 +117,16 @@ export interface AddVaultResult {
   error?: string
 }
 
-export async function addVault(home: string): Promise<AddVaultResult> {
+export async function addVault(home: string, name?: string): Promise<AddVaultResult> {
+  const error = await checkHome(home)
+  if (error) return { error }
   const config = await load()
-  if (config.vaults.some((v) => v.home === home)) {
-    return { error: '该目录已经是一个 vault' }
+  const vault: Vault = {
+    id: randomUUID(),
+    name: name?.trim() || suggestVaultName(home),
+    home,
+    removable: true
   }
-  const agents = detectAgents(home)
-  if (agents.length === 0) {
-    return { error: '该目录下未发现任何 agent 会话数据（.claude / .codex / .local/share/opencode 等）' }
-  }
-  const vault: Vault = { id: randomUUID(), name: basename(home) || home, home, removable: true }
   const next: VaultConfig = { vaults: [...config.vaults, vault], activeVaultId: config.activeVaultId }
   await persist(next)
   return { config: next, vault }

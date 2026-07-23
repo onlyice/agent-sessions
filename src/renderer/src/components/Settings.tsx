@@ -33,6 +33,7 @@ export function Settings({
   onClose,
   vaults,
   activeVaultId,
+  onPickVaultDir,
   onAddVault,
   onRemoveVault,
   onSwitchVault
@@ -42,22 +43,61 @@ export function Settings({
   onClose: () => void
   vaults: Vault[]
   activeVaultId: string
-  onAddVault: () => Promise<string | null>
+  onPickVaultDir: () => Promise<{
+    home?: string
+    suggestedName?: string
+    error?: string
+    canceled?: boolean
+  }>
+  onAddVault: (home: string, name: string) => Promise<string | null>
   onRemoveVault: (id: string) => Promise<void>
   onSwitchVault: (id: string) => Promise<void>
 }): React.JSX.Element {
   const resolved = resolveMode(settings.mode)
   const [vaultError, setVaultError] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  // After a directory is picked, hold it here so the user can name the vault.
+  const [pending, setPending] = useState<{ home: string } | null>(null)
+  const [pendingName, setPendingName] = useState('')
 
-  const handleAdd = async (): Promise<void> => {
+  const handlePick = async (): Promise<void> => {
     setVaultError(null)
-    setAdding(true)
+    setBusy(true)
     try {
-      const err = await onAddVault()
-      if (err) setVaultError(err)
+      const res = await onPickVaultDir()
+      if (res.canceled) return
+      if (res.error) {
+        setVaultError(res.error)
+        return
+      }
+      if (res.home) {
+        setPending({ home: res.home })
+        setPendingName(res.suggestedName ?? '')
+      }
     } finally {
-      setAdding(false)
+      setBusy(false)
+    }
+  }
+
+  const cancelAdd = (): void => {
+    setPending(null)
+    setPendingName('')
+    setVaultError(null)
+  }
+
+  const confirmAdd = async (): Promise<void> => {
+    if (!pending || !pendingName.trim()) return
+    setVaultError(null)
+    setBusy(true)
+    try {
+      const err = await onAddVault(pending.home, pendingName)
+      if (err) {
+        setVaultError(err)
+        return
+      }
+      cancelAdd()
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -86,9 +126,13 @@ export function Settings({
           <section className="settings-section">
             <div className="settings-label-row">
               <label className="settings-label">Vaults</label>
-              <button className="vault-add-btn" onClick={handleAdd} disabled={adding}>
+              <button
+                className="vault-add-btn"
+                onClick={handlePick}
+                disabled={busy || pending !== null}
+              >
                 <FolderPlus size={15} />
-                {adding ? 'Adding…' : 'Add vault…'}
+                Add vault…
               </button>
             </div>
             <p className="settings-hint">
@@ -97,6 +141,39 @@ export function Settings({
               vault is shown at a time.
             </p>
             {vaultError && <div className="vault-error">{vaultError}</div>}
+            {pending && (
+              <div className="vault-add-form">
+                <div className="vault-add-path" title={pending.home}>
+                  {pending.home}
+                </div>
+                <div className="vault-add-row">
+                  <input
+                    className="vault-name-input"
+                    value={pendingName}
+                    autoFocus
+                    placeholder="Vault name"
+                    onChange={(e) => setPendingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void confirmAdd()
+                      if (e.key === 'Escape') {
+                        e.stopPropagation() // don't let it close the settings panel
+                        cancelAdd()
+                      }
+                    }}
+                  />
+                  <button
+                    className="vault-form-btn primary"
+                    onClick={() => void confirmAdd()}
+                    disabled={busy || !pendingName.trim()}
+                  >
+                    Add
+                  </button>
+                  <button className="vault-form-btn" onClick={cancelAdd} disabled={busy}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="vault-list">
               {vaults.map((v) => (
                 <div

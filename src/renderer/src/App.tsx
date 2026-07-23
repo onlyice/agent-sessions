@@ -128,9 +128,10 @@ export default function App(): React.JSX.Element {
     [activeVaultId, refresh]
   )
 
-  const addVault = useCallback(async (): Promise<string | null> => {
-    const res = await api.addVault()
-    if (res.canceled) return null
+  const pickVaultDir = useCallback(() => api.pickVaultDir(), [])
+
+  const addVault = useCallback(async (home: string, name: string): Promise<string | null> => {
+    const res = await api.addVault(home, name)
     if (res.error) return res.error
     if (res.config) {
       setVaults(res.config.vaults)
@@ -362,6 +363,7 @@ export default function App(): React.JSX.Element {
           onClose={() => setShowSettings(false)}
           vaults={vaults}
           activeVaultId={activeVaultId}
+          onPickVaultDir={pickVaultDir}
           onAddVault={addVault}
           onRemoveVault={removeVault}
           onSwitchVault={switchVault}
