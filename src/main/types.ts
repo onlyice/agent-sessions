@@ -31,6 +31,8 @@ export interface Message {
   timestamp: number | null
   /** Model id when known (assistant messages). */
   model?: string
+  /** For merged tool messages: elapsed time between the call and its result, in ms. */
+  toolDurationMs?: number
 }
 
 export interface SubAgentMeta {

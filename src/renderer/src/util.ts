@@ -51,6 +51,16 @@ export function fullTime(ms: number | null): string {
   return new Date(ms).toLocaleString()
 }
 
+/** Human-readable tool execution time, e.g. "820ms", "3.4s", "2m 5s". */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const sec = ms / 1000
+  if (sec < 60) return `${sec.toFixed(sec < 10 ? 1 : 0)}s`
+  const min = Math.floor(sec / 60)
+  const rem = Math.round(sec % 60)
+  return rem ? `${min}m ${rem}s` : `${min}m`
+}
+
 export function baseName(path: string): string {
   if (!path) return ''
   const parts = path.replace(/\/+$/, '').split('/')
