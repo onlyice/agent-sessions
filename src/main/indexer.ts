@@ -60,7 +60,10 @@ export async function reindex(
 
   for (const meta of stale) {
     try {
-      const messages = await collectors[meta.agent].load(meta.sourcePath)
+      const collector = collectors[meta.agent]
+      const messages = collector.loadOnDemand?.(meta.sourcePath)
+        ? []
+        : await collector.load(meta.sourcePath)
       db.upsertSession(meta, meta.updatedAt, messages)
     } catch (err) {
       console.error(`[indexer] failed to load ${meta.id}:`, err)
