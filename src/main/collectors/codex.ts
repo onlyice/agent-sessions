@@ -84,11 +84,18 @@ async function parse(path: string): Promise<Message[]> {
       const raw = typeof p.output === 'string' ? p.output : stringify(p.output)
       const { text: out, exitCode } = typeof p.output === 'string' ? parseCommandOutput(raw) : { text: raw }
       if (!out.trim() && exitCode == null) continue
+      let toolResult: unknown
+      try {
+        toolResult = JSON.parse(raw)
+      } catch {
+        /* not all tool outputs are JSON */
+      }
       const blocks: Block[] = [
         {
           kind: 'tool_result',
           text: out,
           toolCallId: p.call_id,
+          toolResult,
           exitCode,
           isError: exitCode != null && exitCode !== 0 ? true : undefined
         }
