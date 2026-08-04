@@ -101,4 +101,6 @@ export interface Collector {
   list(home: string): Promise<SessionMeta[]>
   /** Load the full transcript for one session by its source path. */
   load(sourcePath: string): Promise<Message[]>
+  /** Remote sources that should fetch and index their transcript only when opened. */
+  loadOnDemand?(sourcePath: string): boolean
 }

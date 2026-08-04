@@ -24,8 +24,15 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
   ipcMain.handle('session:get', async (_e, id: string) => {
     const meta = db.getSession(id)
     if (!meta) return null
-    const messages = await collectors[meta.agent as AgentType].load(meta.sourcePath)
-    return { meta, messages }
+    const collector = collectors[meta.agent as AgentType]
+    const messages = await collector.load(meta.sourcePath)
+    let resolvedMeta = meta
+    if (messages.length > 0 && collector.loadOnDemand?.(meta.sourcePath)) {
+      // Once opened, make remote transcript content available to global search.
+      resolvedMeta = { ...meta, messageCount: messages.length }
+      db.upsertSession(resolvedMeta, meta.updatedAt, messages)
+    }
+    return { meta: resolvedMeta, messages }
   })
 
   ipcMain.handle('search', async (_e, opts: SearchOptions) =>
