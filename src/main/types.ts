@@ -15,6 +15,8 @@ export interface Block {
   toolCallId?: string
   /** Raw tool input (object) for tool_use blocks. */
   toolInput?: unknown
+  /** Structured tool output when the collector can preserve it. */
+  toolResult?: unknown
   /** Process exit code when known for command-like tool results. */
   exitCode?: number
   /** Whether a tool_result represents an error. */

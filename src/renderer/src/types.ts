@@ -7,6 +7,7 @@ export interface Block {
   toolName?: string
   toolCallId?: string
   toolInput?: unknown
+  toolResult?: unknown
   exitCode?: number
   isError?: boolean
 }

@@ -12,7 +12,7 @@ function decodeCwd(dirName: string): string {
   return dirName.replace(/-/g, '/')
 }
 
-function blocksFromClaude(message: any): Block[] {
+function blocksFromClaude(message: any, toolUseResult?: unknown): Block[] {
   const content = message?.content
   const blocks: Block[] = []
   if (typeof content === 'string') {
@@ -34,7 +34,13 @@ function blocksFromClaude(message: any): Block[] {
         break
       case 'tool_result': {
         const text = asText(c.content)
-        blocks.push({ kind: 'tool_result', toolCallId: c.tool_use_id, text, isError: !!c.is_error })
+        blocks.push({
+          kind: 'tool_result',
+          toolCallId: c.tool_use_id,
+          text,
+          toolResult: toolUseResult,
+          isError: !!c.is_error
+        })
         break
       }
       case 'image':
@@ -57,7 +63,7 @@ async function parse(path: string): Promise<Message[]> {
     const msg = ev.message
     if (!msg) continue
     // Skip synthetic/meta-only assistant entries with no usable content.
-    const blocks = blocksFromClaude(msg)
+    const blocks = blocksFromClaude(msg, ev.toolUseResult)
     if (blocks.length === 0) continue
     // When a message consists purely of thinking blocks, label it as 'thinking'
     // rather than 'assistant' so the UI can render it with a distinct header.

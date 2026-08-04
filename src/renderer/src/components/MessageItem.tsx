@@ -70,8 +70,141 @@ function ToolInput({ value }: { value: unknown }): React.JSX.Element {
   )
 }
 
+interface UserQuestionOption {
+  label: string
+  description?: string
+}
+
+interface UserQuestion {
+  id?: string
+  header?: string
+  question: string
+  multiSelect: boolean
+  options: UserQuestionOption[]
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function userQuestions(value: unknown): UserQuestion[] | null {
+  const input = parseJson(value)
+  if (!isRecord(input)) return null
+  const rawQuestions = parseJson(input.questions)
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null
+
+  const questions: UserQuestion[] = []
+  for (const raw of rawQuestions) {
+    if (!isRecord(raw) || typeof raw.question !== 'string' || !raw.question.trim()) return null
+    const rawOptions = Array.isArray(raw.options) ? raw.options : []
+    const options: UserQuestionOption[] = []
+    for (const option of rawOptions) {
+      if (!isRecord(option) || typeof option.label !== 'string' || !option.label.trim()) return null
+      options.push({
+        label: option.label,
+        description: typeof option.description === 'string' ? option.description : undefined
+      })
+    }
+    questions.push({
+      id: typeof raw.id === 'string' ? raw.id : undefined,
+      header: typeof raw.header === 'string' ? raw.header : undefined,
+      question: raw.question,
+      multiSelect: raw.multiSelect === true,
+      options
+    })
+  }
+  return questions
+}
+
+function questionAnswers(question: UserQuestion, result: unknown): string[] {
+  const parsed = parseJson(result)
+  if (!isRecord(parsed) || !isRecord(parsed.answers)) return []
+  const answer = parsed.answers[question.id ?? question.question]
+  if (typeof answer === 'string') return [answer]
+  if (Array.isArray(answer)) return answer.filter((value): value is string => typeof value === 'string')
+  if (isRecord(answer) && Array.isArray(answer.answers)) {
+    return answer.answers.filter((value): value is string => typeof value === 'string')
+  }
+  return []
+}
+
+function UserQuestionBlock({
+  questions,
+  output
+}: {
+  questions: UserQuestion[]
+  output?: Block
+}): React.JSX.Element {
+  return (
+    <div className="tool-block question-block">
+      <div className="tool-head question-head">
+        <span className="tool-name">Asked user</span>
+        <span className="question-count">
+          {questions.length} {questions.length === 1 ? 'question' : 'questions'}
+        </span>
+      </div>
+      <div className="question-list">
+        {questions.map((question, index) => {
+          const answers = questionAnswers(question, output?.toolResult)
+          const optionLabels = new Set(question.options.map((option) => option.label))
+          const customAnswers = answers.filter((answer) => !optionLabels.has(answer))
+          return (
+            <section className="question-item" key={question.id ?? `${index}-${question.question}`}>
+              <div className="question-meta">
+                {question.header && <span className="question-header">{question.header}</span>}
+                <span>{question.multiSelect ? 'Select multiple' : 'Select one'}</span>
+              </div>
+              <div className="question-text">{question.question}</div>
+              {question.options.length > 0 && (
+                <div className="question-options">
+                  {question.options.map((option) => {
+                    const selected = answers.includes(option.label)
+                    return (
+                      <div className={`question-option${selected ? ' selected' : ''}`} key={option.label}>
+                        <span className={`question-marker${question.multiSelect ? ' square' : ''}`} aria-hidden="true">
+                          {selected ? '✓' : ''}
+                        </span>
+                        <span className="question-option-copy">
+                          <span className="question-option-label">{option.label}</span>
+                          {option.description && (
+                            <span className="question-option-description">{option.description}</span>
+                          )}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {customAnswers.map((answer) => (
+                <div className="question-custom-answer" key={answer}>
+                  <span>Answer</span>
+                  <div>{answer}</div>
+                </div>
+              ))}
+            </section>
+          )
+        })}
+      </div>
+      {output?.text && questions.every((question) => questionAnswers(question, output.toolResult).length === 0) && (
+        <div className="question-result">{output.text}</div>
+      )}
+    </div>
+  )
+}
+
 function ToolBlock({ input, output }: { input?: Block; output?: Block }): React.JSX.Element {
   const toolName = input?.toolName?.trim() || output?.toolName?.trim() || 'Tool'
+  const questions =
+    input && (toolName === 'AskUserQuestion' || toolName === 'request_user_input')
+      ? userQuestions(input.toolInput)
+      : null
+  if (questions) return <UserQuestionBlock questions={questions} output={output} />
+
   const title = output?.isError ? `${toolName} (error)` : toolName
   const exitCode = output?.exitCode
 
