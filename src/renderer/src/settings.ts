@@ -36,7 +36,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   themeId: 'default',
-  mode: 'dark',
+  mode: 'system',
   uiFontId: 'open-sans',
   codeFontId: 'ibm-plex-mono',
   reindexIntervalMinutes: 5

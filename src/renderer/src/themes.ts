@@ -54,10 +54,10 @@ export const THEMES: Theme[] = [
     id: 'default',
     name: 'Default',
     dark: {
-      bg: '#1a1a1a', bgSide: '#161616', bgElev: '#232323', bgHover: '#2a2a2a',
-      border: '#303030', text: '#e8e6e3', textDim: '#9a9690', textFaint: '#6b6862',
+      bg: '#202020', bgSide: '#1c1c1c', bgElev: '#292929', bgHover: '#303030',
+      border: '#383838', text: '#e8e6e3', textDim: '#9a9690', textFaint: '#6b6862',
       accent: '#d97757', onAccent: '#1a1a1a', mark: '#f5d76e', markText: '#1a1a1a',
-      codeBg: '#202020', link: '#6cb6ff', scrollbar: '#383838', scrollbarHover: '#454545'
+      codeBg: '#262626', link: '#6cb6ff', scrollbar: '#404040', scrollbarHover: '#4d4d4d'
     },
     light: {
       bg: '#ffffff', bgSide: '#f7f6f4', bgElev: '#f0eeea', bgHover: '#e8e6e1',
