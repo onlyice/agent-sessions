@@ -15,14 +15,14 @@ function blobAsDataUrl(blob: Blob): Promise<string> {
   })
 }
 
-async function inlineUrls(css: string): Promise<string> {
+async function inlineUrls(css: string, baseUrl: string): Promise<string> {
   const urls = [...css.matchAll(/url\(["']?([^"')]+)["']?\)/g)]
   const replacements = new Map<string, string>()
   await Promise.all(
     urls.map(async ([, url]) => {
       if (url.startsWith('data:') || replacements.has(url)) return
       try {
-        const response = await fetch(url)
+        const response = await fetch(new URL(url, baseUrl))
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         replacements.set(url, await blobAsDataUrl(await response.blob()))
       } catch (error) {
@@ -39,15 +39,16 @@ async function inlineUrls(css: string): Promise<string> {
 }
 
 async function documentCss(): Promise<string> {
-  const rules: string[] = []
+  const stylesheets: Promise<string>[] = []
   for (const sheet of document.styleSheets) {
     try {
-      for (const rule of sheet.cssRules) rules.push(rule.cssText)
+      const rules = [...sheet.cssRules].map((rule) => rule.cssText)
+      stylesheets.push(inlineUrls(rules.join('\n'), sheet.href ?? document.baseURI))
     } catch {
       // Ignore inaccessible third-party stylesheets.
     }
   }
-  return inlineUrls(rules.join('\n'))
+  return (await Promise.all(stylesheets)).join('\n')
 }
 
 const EXPORT_CSS = `
