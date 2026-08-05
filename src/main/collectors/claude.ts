@@ -256,6 +256,7 @@ async function readMeta(path: string, dirName: string, root: string): Promise<Se
 
   const sessionId = basename(path, '.jsonl')
   let cwd = ''
+  let customTitle = ''
   let firstUserText = ''
   let firstTs: number | null = null
   let lastTs: number | null = null
@@ -263,6 +264,11 @@ async function readMeta(path: string, dirName: string, root: string): Promise<Se
 
   for (const ev of events) {
     if (ev.cwd && !cwd) cwd = ev.cwd
+    // AI-generated titles and explicit renames use the same event type. The
+    // last value wins so a later /rename is reflected in the session list.
+    if (ev.type === 'custom-title' && typeof ev.customTitle === 'string' && ev.customTitle.trim()) {
+      customTitle = ev.customTitle
+    }
     const ts = toMillis(ev.timestamp)
     if (ts) {
       if (firstTs == null) firstTs = ts
@@ -289,7 +295,7 @@ async function readMeta(path: string, dirName: string, root: string): Promise<Se
     agent: 'claude',
     nativeId: sessionId,
     cwd: cwd || decodeCwd(dirName),
-    title: deriveTitle(firstUserText || truncate(decodeCwd(dirName), 60)),
+    title: deriveTitle(customTitle || firstUserText || truncate(decodeCwd(dirName), 60)),
     createdAt: firstTs ?? stat.birthtimeMs,
     updatedAt: lastTs ?? stat.mtimeMs,
     messageCount: count,

@@ -99,6 +99,14 @@ export class IndexDB {
     return new Map(rows.map((r) => [r.id, r.mtime]))
   }
 
+  /** Returns the indexed title for each session so metadata-only changes are detected. */
+  indexedTitles(vaultId: string): Map<string, string> {
+    const rows = this.db
+      .prepare('SELECT id, title FROM sessions WHERE vaultId = ?')
+      .all(vaultId) as { id: string; title: string }[]
+    return new Map(rows.map((r) => [r.id, r.title]))
+  }
+
   removeSession(id: string): void {
     const tx = this.db.transaction((sid: string) => {
       this.db.prepare('DELETE FROM messages_fts WHERE sessionId = ?').run(sid)
