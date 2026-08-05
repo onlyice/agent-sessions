@@ -9,6 +9,8 @@ const api = {
   stats: () => ipcRenderer.invoke('stats'),
   resume: (id: string) => ipcRenderer.invoke('resume', id),
   copyResumeCommand: (id: string) => ipcRenderer.invoke('resume:command', id),
+  exportTranscriptHtml: (html: string, defaultPath: string) =>
+    ipcRenderer.invoke('transcript:exportHtml', html, defaultPath),
   reindex: () => ipcRenderer.invoke('reindex'),
   listVaults: () => ipcRenderer.invoke('vaults:list'),
   pickVaultDir: () => ipcRenderer.invoke('vaults:pickDir'),

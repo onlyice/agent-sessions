@@ -222,20 +222,24 @@ function ToolBlock({ input, output }: { input?: Block; output?: Block }): React.
   )
 }
 
-function TextBlock({ block, view }: { block: Block; view: TextView }): React.JSX.Element {
+function TextBlock({ block }: { block: Block }): React.JSX.Element {
   const thinking = block.kind === 'thinking'
   const text = block.text ?? ''
-  if (view === 'source') {
-    return <pre className={`block-source${thinking ? ' thinking' : ''}`}>{text}</pre>
-  }
-  return <Markdown className={thinking ? 'block-thinking' : 'block-text'} text={text} />
+  return (
+    <>
+      <div className="text-view-markdown">
+        <Markdown className={thinking ? 'block-thinking' : 'block-text'} text={text} />
+      </div>
+      <pre className={`text-view-source block-source${thinking ? ' thinking' : ''}`}>{text}</pre>
+    </>
+  )
 }
 
-function BlockView({ block, view }: { block: Block; view: TextView }): React.JSX.Element | null {
+function BlockView({ block }: { block: Block }): React.JSX.Element | null {
   switch (block.kind) {
     case 'text':
     case 'thinking':
-      return <TextBlock block={block} view={view} />
+      return <TextBlock block={block} />
     case 'tool_use':
       return <ToolBlock input={block} />
     case 'tool_result':
@@ -257,7 +261,7 @@ function BlockView({ block, view }: { block: Block; view: TextView }): React.JSX
   }
 }
 
-function BlocksView({ blocks, view }: { blocks: Block[]; view: TextView }): React.JSX.Element {
+function BlocksView({ blocks }: { blocks: Block[] }): React.JSX.Element {
   const nodes: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
@@ -266,7 +270,7 @@ function BlocksView({ blocks, view }: { blocks: Block[]; view: TextView }): Reac
       nodes.push(<ToolBlock key={i} input={block} output={next} />)
       i++
     } else {
-      nodes.push(<BlockView key={i} block={block} view={view} />)
+      nodes.push(<BlockView key={i} block={block} />)
     }
   }
   return <>{nodes}</>
@@ -312,15 +316,21 @@ function Collapsible({ children }: { children: React.ReactNode }): React.JSX.Ele
   )
 }
 
-export function MessageItem({ message }: { message: Message }): React.JSX.Element {
+export function MessageItem({
+  message,
+  onViewChange
+}: {
+  message: Message
+  onViewChange?: () => void
+}): React.JSX.Element {
   const label = messageLabel(message)
   const [view, setView] = useState<TextView>('markdown')
   const hasText = message.blocks.some((b) => b.kind === 'text' || b.kind === 'thinking')
   const hasTool = message.blocks.some((b) => b.kind === 'tool_use' || b.kind === 'tool_result')
-  const blocks = <BlocksView blocks={message.blocks} view={view} />
+  const blocks = <BlocksView blocks={message.blocks} />
 
   return (
-    <div className={`msg msg-${message.role}`}>
+    <div className={`msg msg-${message.role}${view === 'source' ? ' source-view' : ''}`}>
       <div className="msg-gutter">
         <span className="msg-role" style={{ color: label.color }}>
           {label.label}
@@ -338,7 +348,10 @@ export function MessageItem({ message }: { message: Message }): React.JSX.Elemen
             <button
               className="view-toggle"
               title="Toggle Markdown / Source"
-              onClick={() => setView((v) => (v === 'markdown' ? 'source' : 'markdown'))}
+              onClick={() => {
+                setView((v) => (v === 'markdown' ? 'source' : 'markdown'))
+                onViewChange?.()
+              }}
             >
               {view === 'source' ? (
                 <>

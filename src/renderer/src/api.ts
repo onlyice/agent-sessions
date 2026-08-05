@@ -25,6 +25,10 @@ interface Api {
   stats(): Promise<{ sessions: number; messages: number }>
   resume(id: string): Promise<{ ok: boolean; command: string; error?: string }>
   copyResumeCommand(id: string): Promise<string>
+  exportTranscriptHtml(
+    html: string,
+    defaultPath: string
+  ): Promise<{ canceled: boolean; filePath?: string }>
   reindex(): Promise<{ sessions: number; messages: number }>
   listVaults(): Promise<VaultConfig>
   /** Opens a native folder picker; returns the validated home + a suggested name, an error, or a cancel flag. */
