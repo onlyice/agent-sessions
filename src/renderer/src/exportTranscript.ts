@@ -64,8 +64,11 @@ body { overflow: auto; }
 }
 .transcript-head { overflow: visible; padding-top: 20px; }
 .transcript-scroll { overflow: visible; contain: none; will-change: auto; }
+.export-subagents { display: block; }
+.has-export-subagents .th-subagents { display: flex; }
+.has-export-subagents .export-subagent-back:not([hidden]) { display: flex; }
 .transcript-search-bar { position: sticky; top: 0; z-index: 10; }
-.app-only-action, .export-action, .th-back, .th-subagents, .toast { display: none !important; }
+.app-only-action, .export-action, .th-back:not(.export-subagent-back), .transcript:not(.has-export-subagents) .th-subagents, .toast { display: none !important; }
 @media (max-width: 1120px) {
   .transcript { border-inline: 0; }
 }
@@ -83,11 +86,37 @@ const EXPORT_SCRIPT = `
   const searchBar = document.querySelector('.transcript-search-bar');
   const searchInput = document.querySelector('.ts-input');
   const searchCount = document.querySelector('.ts-count');
+  const title = document.querySelector('[data-export-title]');
+  const messageCount = document.querySelector('[data-export-message-count]');
+  const subagentBack = document.querySelector('.export-subagent-back');
+  const subagentLabel = document.querySelector('[data-export-subagent-label]');
   const activeRoles = new Set();
   let matches = [], current = 0;
 
   function visibleMessages() {
-    return [...document.querySelectorAll('[data-message-role]')].filter((el) => !el.hidden);
+    return [...document.querySelectorAll('[data-message-role]')].filter(
+      (el) => !el.hidden && !el.closest('[data-export-session][hidden]')
+    );
+  }
+  function showSession(id, label, count) {
+    document.querySelectorAll('[data-export-session]').forEach((section) => {
+      section.hidden = section.dataset.exportSession !== id;
+    });
+    document.querySelectorAll('[data-export-subagent]').forEach((button) => {
+      button.classList.toggle('on', button.dataset.exportSubagent === id);
+    });
+    const isMain = id === 'main';
+    if (title) {
+      title.textContent = isMain ? transcript.dataset.exportMainTitle : label;
+      title.setAttribute('title', title.textContent || '');
+    }
+    if (messageCount) {
+      messageCount.textContent = (isMain ? transcript.dataset.exportMainCount : count) + ' msgs';
+    }
+    if (subagentBack) subagentBack.hidden = isMain;
+    if (subagentLabel) subagentLabel.textContent = isMain ? '' : label;
+    applyFilter();
+    transcript?.scrollIntoView({ block: 'start' });
   }
   function applyFilter() {
     document.querySelectorAll('[data-message-role]').forEach((el) => {
@@ -102,8 +131,11 @@ const EXPORT_SCRIPT = `
       button.style.color = on && role ? button.dataset.filterColor : '';
     });
     const shown = visibleMessages().length;
+    const total = [...document.querySelectorAll('[data-message-role]')].filter(
+      (el) => !el.closest('[data-export-session][hidden]')
+    ).length;
     const counter = document.querySelector('.message-filter-count');
-    if (counter) counter.textContent = shown + '/' + document.querySelectorAll('[data-message-role]').length;
+    if (counter) counter.textContent = shown + '/' + total;
     runSearch();
   }
   function showCurrent() {
@@ -156,6 +188,12 @@ const EXPORT_SCRIPT = `
       else if (activeRoles.has(role)) activeRoles.delete(role);
       else activeRoles.add(role);
       applyFilter();
+    }
+    if (target.matches('[data-export-subagent]')) {
+      showSession(target.dataset.exportSubagent, target.dataset.exportLabel, target.dataset.exportCount);
+    }
+    if (target.matches('[data-export-back]')) {
+      showSession('main', transcript.dataset.exportMainTitle, transcript.dataset.exportMainCount);
     }
     if (target.matches('.view-toggle')) {
       const message = target.closest('.msg');
