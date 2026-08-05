@@ -22,6 +22,11 @@ interface DisplayMessage {
   relatedIdxs: number[]
 }
 
+interface ExportSubAgent {
+  meta: SubAgentMeta
+  messages: Message[]
+}
+
 const ALL_ROLES: Role[] = ['user', 'assistant', 'thinking', 'tool', 'system']
 
 function isToolBlock(kind: Message['blocks'][number]['kind']): boolean {
@@ -136,6 +141,20 @@ function mergeToolMessages(messages: Message[]): DisplayMessage[] {
   return out
 }
 
+function ExportSubAgentSection({ meta, messages }: ExportSubAgent): React.JSX.Element {
+  const displayMessages = mergeToolMessages(messages)
+  return (
+    <section data-export-session={meta.id} hidden>
+      {displayMessages.map(({ key, message, relatedIdxs }) => (
+        <div key={key} data-idx={relatedIdxs.join(' ')} data-message-role={message.role}>
+          <MessageItem message={message} />
+        </div>
+      ))}
+      {messages.length === 0 && <div className="empty">No renderable messages</div>}
+    </section>
+  )
+}
+
 export function TranscriptView({
   sessionId,
   jumpTo,
@@ -154,6 +173,7 @@ export function TranscriptView({
   const [currentMatch, setCurrentMatch] = useState(0)
   const [totalMatches, setTotalMatches] = useState(0)
   const [viewRevision, setViewRevision] = useState(0)
+  const [exportSubAgents, setExportSubAgents] = useState<ExportSubAgent[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -340,6 +360,19 @@ export function TranscriptView({
     if (!transcriptRef.current || !meta) return
     try {
       setToast('Preparing HTML export…')
+      if (!subAgent && meta.subAgents.length > 0) {
+        const loaded = await Promise.all(
+          meta.subAgents.map(async (agent) => ({
+            meta: agent,
+            messages: (await api.loadSubAgent(agent.sourcePath)).messages
+          }))
+        )
+        setExportSubAgents(loaded)
+        // Wait for React to render the export-only sections before cloning the DOM.
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+      }
       const title = subAgent ? subAgent.label : meta.title
       const html = await buildTranscriptHtml(transcriptRef.current, title)
       const safeName = title.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 120) || 'transcript'
@@ -349,6 +382,8 @@ export function TranscriptView({
     } catch (error) {
       setToast(`Export failed: ${error instanceof Error ? error.message : 'unknown error'}`)
       setTimeout(() => setToast(''), 5000)
+    } finally {
+      setExportSubAgents([])
     }
   }
 
@@ -359,7 +394,12 @@ export function TranscriptView({
   const hasSubs = meta.subAgents.length > 0
 
   return (
-    <div className="transcript" ref={transcriptRef}>
+    <div
+      className={`transcript${exportSubAgents.length > 0 ? ' has-export-subagents' : ''}`}
+      data-export-main-title={meta.title}
+      data-export-main-count={meta.messageCount}
+      ref={transcriptRef}
+    >
       <header className="transcript-head">
         {subAgent && (
           <div className="th-back">
@@ -371,11 +411,21 @@ export function TranscriptView({
             </span>
           </div>
         )}
+        {!subAgent && (
+          <div className="th-back export-subagent-back" hidden>
+            <button className="btn btn-back" data-export-back>
+              <ArrowLeft size={14} /> Back to main session
+            </button>
+            <span className="th-sub-label">
+              <Bot size={13} /> <span data-export-subagent-label />
+            </span>
+          </div>
+        )}
         <div className="th-main">
           <span className="agent-badge" style={{ background: agent.color }}>
             {agent.label}
           </span>
-          <h2 title={subAgent ? subAgent.label : meta.title}>
+          <h2 title={subAgent ? subAgent.label : meta.title} data-export-title>
             {subAgent ? subAgent.label : meta.title}
           </h2>
         </div>
@@ -394,7 +444,9 @@ export function TranscriptView({
             </button>
           )}
           <span className="th-dot">·</span>
-          <span>{subAgent ? subAgent.messageCount : meta.messageCount} msgs</span>
+          <span data-export-message-count>
+            {subAgent ? subAgent.messageCount : meta.messageCount} msgs
+          </span>
           <span className="th-dot">·</span>
           <span>{fullTime(meta.updatedAt)}</span>
         </div>
@@ -436,6 +488,9 @@ export function TranscriptView({
                 className={`chip sub-agent-chip ${subAgent?.id === sa.id ? 'on' : ''}`}
                 onClick={() => onSelectSubAgent?.(sa)}
                 title={sa.label}
+                data-export-subagent={sa.id}
+                data-export-label={sa.label}
+                data-export-count={sa.messageCount}
               >
                 {sa.label.length > 40 ? sa.label.slice(0, 40) + '…' : sa.label}
                 <span className="sa-chip-count">{sa.messageCount}</span>
@@ -523,19 +578,28 @@ export function TranscriptView({
         </div>
 
       <div className="transcript-scroll" ref={scrollRef}>
-        {displayMessages.map(({ key, message, relatedIdxs }) => (
-          <div
-            key={key}
-            data-idx={relatedIdxs.join(' ')}
-            data-message-role={message.role}
-            hidden={roleFilters.size > 0 && !roleFilters.has(message.role)}
-          >
-            <MessageItem message={message} onViewChange={() => setViewRevision((value) => value + 1)} />
+        <section data-export-session="main">
+          {displayMessages.map(({ key, message, relatedIdxs }) => (
+            <div
+              key={key}
+              data-idx={relatedIdxs.join(' ')}
+              data-message-role={message.role}
+              hidden={roleFilters.size > 0 && !roleFilters.has(message.role)}
+            >
+              <MessageItem message={message} onViewChange={() => setViewRevision((value) => value + 1)} />
+            </div>
+          ))}
+          {messages.length === 0 && <div className="empty">No renderable messages</div>}
+          {messages.length > 0 && visibleDisplayMessages.length === 0 && (
+            <div className="empty filter-empty">No messages match this filter</div>
+          )}
+        </section>
+        {!subAgent && exportSubAgents.length > 0 && (
+          <div className="export-subagents">
+            {exportSubAgents.map((agent) => (
+              <ExportSubAgentSection key={agent.meta.sourcePath} {...agent} />
+            ))}
           </div>
-        ))}
-        {messages.length === 0 && <div className="empty">No renderable messages</div>}
-        {messages.length > 0 && visibleDisplayMessages.length === 0 && (
-          <div className="empty filter-empty">No messages match this filter</div>
         )}
       </div>
 

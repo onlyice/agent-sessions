@@ -862,6 +862,14 @@ textarea {
   contain: content;
 }
 
+/* Loaded only while preparing a complete main-session HTML export. */
+.export-subagents {
+  display: none;
+}
+.export-subagent-back {
+  display: none;
+}
+
 /* ---------- Messages ---------- */
 .msg {
   padding: 10px 22px;
