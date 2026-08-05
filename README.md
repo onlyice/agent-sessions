@@ -19,6 +19,14 @@
 - **全局搜索**：基于 SQLite **FTS5（trigram 分词）**，支持中英文子串搜索；2 字以内的短词（含中文）自动走 `LIKE` 回退。可按 **角色范围**（user / assistant / thinking / tool / system）和 **Agent** 过滤；点击搜索结果可直接跳转到对应消息。
 - **一键 Resume**：在已运行的 **Ghostty** 中新开一个 tab，自动 `cd` 到原工作目录并执行该 agent 的 resume 命令。
 
+## 安装
+
+在 macOS 终端运行以下命令，即可自动下载并安装最新版本到 `/Applications`。安装脚本会在完成后通过 `xattr` 移除 macOS 的 quarantine 标记，避免出现无法验证开发者的安全提醒。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/onlyice/agent-sessions/main/install.sh | bash
+```
+
 ## 技术栈
 
 Electron + React + TypeScript + Vite（electron-vite），原生 `better-sqlite3` 提供 FTS5 全文索引。所有依赖均为当前最新版本，Node 固定在 **LTS 24**（见 `.node-version`）。
