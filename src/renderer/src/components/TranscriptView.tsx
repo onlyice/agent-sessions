@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Bot, ChevronDown, ChevronUp, Copy, Play, Search, X } from 'lucide-react'
+import { ArrowLeft, Bot, ChevronDown, ChevronUp, Copy, Download, Play, Search, X } from 'lucide-react'
 import { api } from '../api'
+import { buildTranscriptHtml } from '../exportTranscript'
 import type { Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { AGENT_META, ROLE_META, fullTime, shortPath } from '../util'
 import { MessageItem } from './MessageItem'
@@ -40,11 +41,19 @@ function splitToolBlocks(messages: Message[]): DisplayMessage[] {
     let regularBlocks: Message['blocks'] = []
 
     const push = (blocks: Message['blocks']): void => {
+      const standaloneRole =
+        blocks.length === 1
+          ? blocks[0].kind === 'thinking'
+            ? 'thinking'
+            : isToolBlock(blocks[0].kind)
+              ? 'tool'
+              : message.role
+          : message.role
       out.push({
         key: `${message.idx}-${segment++}`,
         message: {
           ...message,
-          role: blocks.length === 1 && isToolBlock(blocks[0].kind) ? 'tool' : message.role,
+          role: standaloneRole,
           text: blocks.map((block) => block.text).filter(Boolean).join('\n'),
           blocks
         },
@@ -53,7 +62,7 @@ function splitToolBlocks(messages: Message[]): DisplayMessage[] {
     }
 
     for (const block of message.blocks) {
-      if (isToolBlock(block.kind)) {
+      if (isToolBlock(block.kind) || block.kind === 'thinking') {
         if (regularBlocks.length > 0) {
           push(regularBlocks)
           regularBlocks = []
@@ -144,7 +153,9 @@ export function TranscriptView({
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const [currentMatch, setCurrentMatch] = useState(0)
   const [totalMatches, setTotalMatches] = useState(0)
+  const [viewRevision, setViewRevision] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const transcriptRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const matchRangesRef = useRef<Range[]>([])
 
@@ -226,6 +237,11 @@ export function TranscriptView({
 
     while (walker.nextNode()) {
       const node = walker.currentNode as Text
+      if (node.parentElement?.closest('[data-message-role][hidden]')) continue
+      if (node.parentElement?.closest('.msg-toolbar, .collapse-toggle')) continue
+      const message = node.parentElement?.closest('.msg')
+      if (node.parentElement?.closest('.text-view-source') && !message?.classList.contains('source-view')) continue
+      if (node.parentElement?.closest('.text-view-markdown') && message?.classList.contains('source-view')) continue
       const text = node.textContent?.toLowerCase() ?? ''
       let start = 0
       for (;;) {
@@ -249,7 +265,7 @@ export function TranscriptView({
       const toHighlight = ranges.length <= MAX_HIGHLIGHTS ? ranges : ranges.slice(0, MAX_HIGHLIGHTS)
       CSS.highlights.set('transcript-search', new Highlight(...toHighlight))
     }
-  }, [debouncedQuery, visibleDisplayMessages])
+  }, [debouncedQuery, visibleDisplayMessages, viewRevision])
 
   // Highlight + scroll to the current match
   useEffect(() => {
@@ -320,6 +336,22 @@ export function TranscriptView({
     })
   }
 
+  async function onExport(): Promise<void> {
+    if (!transcriptRef.current || !meta) return
+    try {
+      setToast('Preparing HTML export…')
+      const title = subAgent ? subAgent.label : meta.title
+      const html = await buildTranscriptHtml(transcriptRef.current, title)
+      const safeName = title.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 120) || 'transcript'
+      const result = await api.exportTranscriptHtml(html, `${safeName}.html`)
+      setToast(result.canceled ? '' : 'Transcript exported ✓')
+      if (!result.canceled) setTimeout(() => setToast(''), 3000)
+    } catch (error) {
+      setToast(`Export failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+      setTimeout(() => setToast(''), 5000)
+    }
+  }
+
   if (loading) return <div className="transcript empty">Loading…</div>
   if (!meta) return <div className="transcript empty">Session not found</div>
 
@@ -327,7 +359,7 @@ export function TranscriptView({
   const hasSubs = meta.subAgents.length > 0
 
   return (
-    <div className="transcript">
+    <div className="transcript" ref={transcriptRef}>
       <header className="transcript-head">
         {subAgent && (
           <div className="th-back">
@@ -368,11 +400,11 @@ export function TranscriptView({
         </div>
         {!subAgent && (
           <div className="th-actions">
-            <button className="btn primary" onClick={onResume}>
+            <button className="btn primary app-only-action" onClick={onResume}>
               <Play size={14} /> Resume in Ghostty
             </button>
             <button
-              className="btn"
+              className="btn app-only-action"
               onClick={async () => {
                 await api.copyResumeCommand(sessionId)
                 setToast('Resume command copied')
@@ -380,6 +412,16 @@ export function TranscriptView({
               }}
             >
               Copy command
+            </button>
+            <button className="btn export-action" onClick={() => void onExport()}>
+              <Download size={14} /> Export HTML
+            </button>
+          </div>
+        )}
+        {subAgent && (
+          <div className="th-actions">
+            <button className="btn export-action" onClick={() => void onExport()}>
+              <Download size={14} /> Export HTML
             </button>
           </div>
         )}
@@ -407,6 +449,7 @@ export function TranscriptView({
             className={`chip ${roleFilters.size === 0 ? 'on' : ''}`}
             onClick={() => setRoleFilters(new Set())}
             aria-pressed={roleFilters.size === 0}
+            data-filter-role=""
           >
             All
           </button>
@@ -421,6 +464,8 @@ export function TranscriptView({
               }
               onClick={() => toggleRole(role)}
               aria-pressed={roleFilters.has(role)}
+              data-filter-role={role}
+              data-filter-color={ROLE_META[role].color}
             >
               {ROLE_META[role].label}
             </button>
@@ -431,8 +476,7 @@ export function TranscriptView({
         </div>
       </header>
 
-      {showSearch && (
-        <div className="transcript-search-bar">
+      <div className="transcript-search-bar" hidden={!showSearch}>
           <Search size={14} className="ts-icon" />
           <input
             ref={searchInputRef}
@@ -452,16 +496,15 @@ export function TranscriptView({
             }}
             autoFocus
           />
-          {searchQuery && (
-            <span className="ts-count">
-              {totalMatches > 0 ? `${currentMatch + 1}/${totalMatches}` : 'No matches'}
-            </span>
-          )}
+          <span className="ts-count" hidden={!searchQuery}>
+            {totalMatches > 0 ? `${currentMatch + 1}/${totalMatches}` : 'No matches'}
+          </span>
           <button
             className="ts-nav"
             onClick={() => goToMatch(-1)}
             disabled={totalMatches === 0}
             title="Previous match (Shift+Enter)"
+            data-search-prev
           >
             <ChevronUp size={15} />
           </button>
@@ -470,24 +513,29 @@ export function TranscriptView({
             onClick={() => goToMatch(1)}
             disabled={totalMatches === 0}
             title="Next match (Enter)"
+            data-search-next
           >
             <ChevronDown size={15} />
           </button>
-          <button className="ts-nav" onClick={closeSearch} title="Close (Esc)">
+          <button className="ts-nav" onClick={closeSearch} title="Close (Esc)" data-search-close>
             <X size={15} />
           </button>
         </div>
-      )}
 
       <div className="transcript-scroll" ref={scrollRef}>
-        {visibleDisplayMessages.map(({ key, message, relatedIdxs }) => (
-          <div key={key} data-idx={relatedIdxs.join(' ')}>
-            <MessageItem message={message} />
+        {displayMessages.map(({ key, message, relatedIdxs }) => (
+          <div
+            key={key}
+            data-idx={relatedIdxs.join(' ')}
+            data-message-role={message.role}
+            hidden={roleFilters.size > 0 && !roleFilters.has(message.role)}
+          >
+            <MessageItem message={message} onViewChange={() => setViewRevision((value) => value + 1)} />
           </div>
         ))}
         {messages.length === 0 && <div className="empty">No renderable messages</div>}
         {messages.length > 0 && visibleDisplayMessages.length === 0 && (
-          <div className="empty">No messages match this filter</div>
+          <div className="empty filter-empty">No messages match this filter</div>
         )}
       </div>
 

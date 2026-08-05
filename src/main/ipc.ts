@@ -1,4 +1,5 @@
-import { ipcMain, BrowserWindow, clipboard, dialog } from 'electron'
+import { ipcMain, BrowserWindow, clipboard, dialog, shell } from 'electron'
+import { writeFile } from 'fs/promises'
 import { collectors, AGENT_LABELS } from './collectors'
 import type { IndexDB, SearchOptions } from './db'
 import { reindex } from './indexer'
@@ -53,6 +54,20 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     const cmd = buildResumeCommand(meta)
     clipboard.writeText(cmd)
     return cmd
+  })
+
+  ipcMain.handle('transcript:exportHtml', async (_e, html: string, defaultPath: string) => {
+    const win = getWindow()
+    const opts = {
+      title: 'Export transcript as HTML',
+      defaultPath,
+      filters: [{ name: 'HTML document', extensions: ['html'] }]
+    }
+    const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+    if (res.canceled || !res.filePath) return { canceled: true }
+    await writeFile(res.filePath, html, 'utf8')
+    shell.showItemInFolder(res.filePath)
+    return { canceled: false, filePath: res.filePath }
   })
 
   ipcMain.handle('subagent:load', async (_e, sourcePath: string) => {

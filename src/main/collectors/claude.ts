@@ -59,6 +59,18 @@ async function parse(path: string): Promise<Message[]> {
   const messages: Message[] = []
   let idx = 0
   for (const ev of events) {
+    if (ev.type === 'system') {
+      const text = asText(ev.content)
+      if (!text.trim()) continue
+      messages.push({
+        idx: idx++,
+        role: 'system',
+        text,
+        blocks: [{ kind: 'text', text }],
+        timestamp: toMillis(ev.timestamp)
+      })
+      continue
+    }
     if (ev.type !== 'user' && ev.type !== 'assistant') continue
     const msg = ev.message
     if (!msg) continue

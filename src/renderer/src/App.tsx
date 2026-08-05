@@ -4,7 +4,6 @@ import { api } from './api'
 import type {
   AgentType,
   IndexProgress,
-  Role,
   SearchHit,
   SessionMeta,
   SubAgentMeta,
@@ -15,7 +14,6 @@ import { TranscriptView } from './components/TranscriptView'
 import { Settings } from './components/Settings'
 import { useSettings } from './settings'
 
-const ALL_ROLES: Role[] = ['user', 'assistant', 'thinking', 'tool', 'system']
 const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'opencode', 'amp', 'pi']
 
 interface Selection {
@@ -28,7 +26,6 @@ interface Selection {
 export default function App(): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [query, setQuery] = useState('')
-  const [roles, setRoles] = useState<Set<Role>>(new Set())
   const [agents, setAgents] = useState<Set<AgentType>>(new Set())
   const [hits, setHits] = useState<SearchHit[] | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -202,7 +199,6 @@ export default function App(): React.JSX.Element {
     debounce.current = setTimeout(async () => {
       const res = await api.search({
         query,
-        roles: roles.size ? [...roles] : undefined,
         agents: agents.size ? [...agents] : undefined,
         limit: 300
       })
@@ -210,7 +206,7 @@ export default function App(): React.JSX.Element {
       setSearching(false)
     }, 180)
     return () => clearTimeout(debounce.current)
-  }, [query, roles, agents])
+  }, [query, agents])
 
   // Apply agent filter to the plain session list too.
   const visibleSessions = useMemo(
@@ -270,31 +266,21 @@ export default function App(): React.JSX.Element {
             )}
           </div>
 
-          <div className="filters">
-            <span className="filter-label">Scope</span>
-            {ALL_ROLES.map((r) => (
-              <button
-                key={r}
-                className={`chip ${roles.has(r) ? 'on' : ''}`}
-                style={roles.has(r) ? { borderColor: ROLE_META[r].color, color: ROLE_META[r].color } : undefined}
-                onClick={() => toggle(roles, r, setRoles)}
-              >
-                {ROLE_META[r].label}
-              </button>
-            ))}
-          </div>
-          <div className="filters">
-            <span className="filter-label">Agent</span>
-            {ALL_AGENTS.map((a) => (
-              <button
-                key={a}
-                className={`chip ${agents.has(a) ? 'on' : ''}`}
-                style={agents.has(a) ? { borderColor: AGENT_META[a].color, color: AGENT_META[a].color } : undefined}
-                onClick={() => toggle(agents, a, setAgents)}
-              >
-                {AGENT_META[a].short}
-              </button>
-            ))}
+          <div className="agent-filter" aria-label="Filter by agent">
+            <span className="agent-filter-label">Agents</span>
+            <div className="agent-filter-options">
+              {ALL_AGENTS.map((a) => (
+                <button
+                  key={a}
+                  className={`agent-filter-option ${agents.has(a) ? 'on' : ''}`}
+                  onClick={() => toggle(agents, a, setAgents)}
+                  aria-pressed={agents.has(a)}
+                >
+                  <span className="agent-filter-dot" style={{ background: AGENT_META[a].color }} />
+                  <span>{AGENT_META[a].label}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

@@ -28,6 +28,18 @@ function textFromContent(content: any): string {
     .join('\n')
 }
 
+function reasoningText(payload: any): string {
+  const content =
+    typeof payload.content === 'string' ? payload.content : textFromContent(payload.content)
+  if (content.trim()) return content
+  return Array.isArray(payload.summary)
+    ? payload.summary
+        .map((item: any) => (typeof item === 'string' ? item : item?.text ?? ''))
+        .filter(Boolean)
+        .join('\n')
+    : ''
+}
+
 function parseCommandOutput(raw: string): { text: string; exitCode?: number } {
   const lines = raw.split('\n')
   const outputLineIndex = lines.findIndex((line, index) => index <= 8 && line === 'Output:')
@@ -59,10 +71,11 @@ async function parse(path: string): Promise<Message[]> {
       // The developer/system preamble is huge boilerplate; keep but mark as system.
       messages.push({ idx: idx++, role, text, blocks: [{ kind: 'text', text }], timestamp: ts })
     } else if (p.type === 'reasoning') {
-      const summary = Array.isArray(p.summary)
-        ? p.summary.map((s: any) => (typeof s === 'string' ? s : s?.text ?? '')).join('\n')
-        : ''
-      const text = summary || (typeof p.content === 'string' ? p.content : '')
+      // Newer Codex rollouts usually retain only a readable summary and an
+      // encrypted reasoning payload. Prefer full content when a version writes
+      // it, then fall back to the summary; encrypted_content is not decryptable
+      // by transcript consumers.
+      const text = reasoningText(p)
       if (!text.trim()) continue
       messages.push({
         idx: idx++,
