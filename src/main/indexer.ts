@@ -33,10 +33,10 @@ async function listVault(vault: Vault): Promise<SessionMeta[]> {
 
 /**
  * Incrementally sync on-disk sessions into the index for every vault.
- * A session is (re)indexed when it's new or its updatedAt changed; sessions
- * that disappeared from disk are removed. updatedAt doubles as a cheap version
- * marker (it advances as a transcript grows). Each vault is pruned in isolation
- * so removing/adding one vault never touches another's rows.
+ * A session is (re)indexed when it's new, its updatedAt changed, or its title
+ * metadata changed; sessions that disappeared from disk are removed. updatedAt
+ * doubles as a cheap transcript version marker. Each vault is pruned in
+ * isolation so removing/adding one vault never touches another's rows.
  */
 export async function reindex(
   db: IndexDB,
@@ -52,7 +52,10 @@ export async function reindex(
 
   const stale = perVault.flatMap(({ vault, metas }) => {
     const existing = db.indexedMtimes(vault.id)
-    return metas.filter((m) => existing.get(m.id) !== m.updatedAt)
+    const titles = db.indexedTitles(vault.id)
+    return metas.filter(
+      (m) => existing.get(m.id) !== m.updatedAt || titles.get(m.id) !== m.title
+    )
   })
 
   let indexed = 0

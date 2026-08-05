@@ -52,15 +52,23 @@ export default function App(): React.JSX.Element {
     reindexTimer.current = undefined
   }, [])
 
+  const refresh = useCallback(async (): Promise<void> => {
+    const list = await api.listSessions()
+    setSessions(list)
+  }, [])
+
   const runReindex = useCallback(async (): Promise<void> => {
     if (reindexing.current) return
     reindexing.current = true
     try {
       await api.reindex()
+      // Do not rely solely on the progress event: a fast reindex can finish
+      // before the renderer subscribes, leaving the in-memory list stale.
+      await refresh()
     } finally {
       reindexing.current = false
     }
-  }, [])
+  }, [refresh])
 
   const scheduleReindex = useCallback((): void => {
     clearReindexTimer()
@@ -98,11 +106,6 @@ export default function App(): React.JSX.Element {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
-
-  const refresh = useCallback(async (): Promise<void> => {
-    const list = await api.listSessions()
-    setSessions(list)
-  }, [])
 
   const loadVaults = useCallback(async (): Promise<void> => {
     const cfg = await api.listVaults()

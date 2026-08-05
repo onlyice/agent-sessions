@@ -1,9 +1,65 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
+import Database from 'better-sqlite3'
 import type { Block, Collector, Message, Role, SessionMeta } from '../types'
 import { deriveTitle, flatten, parseJsonl, stringify, toMillis, truncate } from './util'
 
 const rootFor = (home: string): string => join(home, '.codex', 'sessions')
+
+/** Read the latest generated or explicitly assigned name for each Codex thread. */
+async function loadThreadNames(home: string): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+
+  // Keep the append-only compatibility index as a fallback for older Codex
+  // versions and threads that have not yet been imported into the state DB.
+  try {
+    const events = parseJsonl(await fs.readFile(join(home, '.codex', 'session_index.jsonl'), 'utf8'))
+    for (const event of events) {
+      if (
+        typeof event.id === 'string' &&
+        typeof event.thread_name === 'string' &&
+        event.thread_name.trim()
+      ) {
+        // The index is append-only, so later entries supersede earlier names.
+        names.set(event.id, event.thread_name)
+      }
+    }
+  } catch {
+    // Older Codex versions may not have a session index.
+  }
+
+  // Codex Desktop/IDE stores generated titles in the thread database. `name`
+  // is an explicit/generated display name when present; legacy histories may
+  // instead overwrite `title`, so support both schemas and prefer name.
+  let db: Database.Database | undefined
+  try {
+    db = new Database(join(home, '.codex', 'state_5.sqlite'), {
+      readonly: true,
+      fileMustExist: true
+    })
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info('threads')").all() as { name: string }[]).map((c) => c.name)
+    )
+    if (columns.has('id') && columns.has('title')) {
+      const rows = columns.has('name')
+        ? (db
+            .prepare('SELECT id, title, name FROM threads')
+            .all() as { id: string; title: string; name: string | null }[])
+        : (db
+            .prepare('SELECT id, title, NULL AS name FROM threads')
+            .all() as { id: string; title: string; name: null }[])
+      for (const row of rows) {
+        const title = row.name?.trim() || row.title?.trim()
+        if (row.id && title) names.set(row.id, title)
+      }
+    }
+  } catch {
+    // The state DB is optional and its internal schema can vary by version.
+  } finally {
+    db?.close()
+  }
+  return names
+}
 
 /** Recursively collect rollout-*.jsonl files under the year/month/day tree. */
 async function walk(dir: string, acc: string[]): Promise<void> {
@@ -130,13 +186,13 @@ export const codexCollector: Collector = {
 
   async list(home: string): Promise<SessionMeta[]> {
     const files: string[] = []
-    await walk(rootFor(home), files)
+    const [threadNames] = await Promise.all([loadThreadNames(home), walk(rootFor(home), files)])
     const out: SessionMeta[] = []
     for (const path of files) {
       try {
         const stat = await fs.stat(path)
         if (stat.size === 0) continue
-        const meta = await readMeta(path, stat.mtimeMs)
+        const meta = await readMeta(path, stat.mtimeMs, threadNames)
         if (meta) out.push(meta)
       } catch {
         /* ignore */
@@ -148,7 +204,11 @@ export const codexCollector: Collector = {
   load: parse
 }
 
-async function readMeta(path: string, mtime: number): Promise<SessionMeta | null> {
+async function readMeta(
+  path: string,
+  mtime: number,
+  threadNames: Map<string, string>
+): Promise<SessionMeta | null> {
   const events = parseJsonl(await fs.readFile(path, 'utf8'))
   let id = ''
   let cwd = ''
@@ -186,7 +246,7 @@ async function readMeta(path: string, mtime: number): Promise<SessionMeta | null
     agent: 'codex',
     nativeId: id,
     cwd,
-    title: deriveTitle(firstUserText || truncate(cwd, 60)),
+    title: deriveTitle(threadNames.get(id) || firstUserText || truncate(cwd, 60)),
     createdAt: createdAt ?? mtime,
     updatedAt: lastTs ?? mtime,
     messageCount: count,
