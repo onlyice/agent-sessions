@@ -24,7 +24,7 @@
 在 macOS 终端运行以下命令，即可自动下载并安装最新版本到 `/Applications`。安装脚本会在完成后通过 `xattr` 移除 macOS 的 quarantine 标记，避免出现无法验证开发者的安全提醒。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onlyice/agent-sessions/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/onlyice/agent-sessions/refs/heads/main/install.sh | bash
 ```
 
 ## 技术栈
