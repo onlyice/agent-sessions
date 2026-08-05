@@ -16,14 +16,15 @@ interface Props {
 }
 
 interface DisplayMessage {
+  key: string
   message: Message
   relatedIdxs: number[]
 }
 
 const ALL_ROLES: Role[] = ['user', 'assistant', 'thinking', 'tool', 'system']
 
-function isSingleToolMessage(message: Message, kind: 'tool_use' | 'tool_result'): boolean {
-  return message.blocks.length === 1 && message.blocks[0]?.kind === kind
+function isToolBlock(kind: Message['blocks'][number]['kind']): boolean {
+  return kind === 'tool_use' || kind === 'tool_result'
 }
 
 function toolCallId(message: Message): string | undefined {
@@ -31,53 +32,96 @@ function toolCallId(message: Message): string | undefined {
   return typeof id === 'string' && id.trim() ? id : undefined
 }
 
-function mergeAdjacentToolMessages(messages: Message[]): DisplayMessage[] {
+function splitToolBlocks(messages: Message[]): DisplayMessage[] {
+  const out: DisplayMessage[] = []
+
+  for (const message of messages) {
+    let segment = 0
+    let regularBlocks: Message['blocks'] = []
+
+    const push = (blocks: Message['blocks']): void => {
+      out.push({
+        key: `${message.idx}-${segment++}`,
+        message: {
+          ...message,
+          role: blocks.length === 1 && isToolBlock(blocks[0].kind) ? 'tool' : message.role,
+          text: blocks.map((block) => block.text).filter(Boolean).join('\n'),
+          blocks
+        },
+        relatedIdxs: [message.idx]
+      })
+    }
+
+    for (const block of message.blocks) {
+      if (isToolBlock(block.kind)) {
+        if (regularBlocks.length > 0) {
+          push(regularBlocks)
+          regularBlocks = []
+        }
+        push([block])
+      } else {
+        regularBlocks.push(block)
+      }
+    }
+    if (regularBlocks.length > 0) push(regularBlocks)
+  }
+
+  return out
+}
+
+function mergeToolMessages(messages: Message[]): DisplayMessage[] {
+  const parts = splitToolBlocks(messages)
   const out: DisplayMessage[] = []
   const consumed = new Set<number>()
 
-  function findMatchingResult(inputIndex: number): Message | undefined {
-    const input = messages[inputIndex]
-    const id = toolCallId(input)
+  function findMatchingResult(inputIndex: number): number | undefined {
+    const id = toolCallId(parts[inputIndex].message)
     if (id) {
-      return messages.find(
-        (candidate, candidateIndex) =>
+      const match = parts.findIndex(
+        ({ message: candidate }, candidateIndex) =>
           candidateIndex > inputIndex &&
-          !consumed.has(candidate.idx) &&
-          isSingleToolMessage(candidate, 'tool_result') &&
+          !consumed.has(candidateIndex) &&
+          candidate.blocks[0]?.kind === 'tool_result' &&
           toolCallId(candidate) === id
       )
+      return match >= 0 ? match : undefined
     }
 
-    const next = messages[inputIndex + 1]
-    return next && !consumed.has(next.idx) && isSingleToolMessage(next, 'tool_result') ? next : undefined
+    const next = parts[inputIndex + 1]?.message
+    return next && !consumed.has(inputIndex + 1) && next.blocks[0]?.kind === 'tool_result'
+      ? inputIndex + 1
+      : undefined
   }
 
-  for (let i = 0; i < messages.length; i++) {
-    const current = messages[i]
-    if (consumed.has(current.idx)) continue
+  for (let i = 0; i < parts.length; i++) {
+    const current = parts[i]
+    if (consumed.has(i)) continue
 
-    const next = isSingleToolMessage(current, 'tool_use') ? findMatchingResult(i) : undefined
-    if (next) {
-      const input = current.blocks[0]
-      const output = next.blocks[0]
+    const resultIndex =
+      current.message.blocks[0]?.kind === 'tool_use' ? findMatchingResult(i) : undefined
+    if (resultIndex != null) {
+      const result = parts[resultIndex]
+      const input = current.message.blocks[0]
+      const output = result.message.blocks[0]
       const durationMs =
-        current.timestamp != null && next.timestamp != null
-          ? next.timestamp - current.timestamp
+        current.message.timestamp != null && result.message.timestamp != null
+          ? result.message.timestamp - current.message.timestamp
           : undefined
       out.push({
+        key: current.key,
         message: {
-          ...current,
+          ...current.message,
           role: 'tool',
-          text: [current.text, next.text].filter(Boolean).join('\n'),
+          text: [current.message.text, result.message.text].filter(Boolean).join('\n'),
           blocks: [input, { ...output, toolName: output.toolName ?? input.toolName }],
-          timestamp: current.timestamp ?? next.timestamp,
+          timestamp: current.message.timestamp ?? result.message.timestamp,
           toolDurationMs: durationMs != null && durationMs >= 0 ? durationMs : undefined
         },
-        relatedIdxs: [current.idx, next.idx]
+        relatedIdxs: [...new Set([...current.relatedIdxs, ...result.relatedIdxs])]
       })
-      consumed.add(next.idx)
+      consumed.add(resultIndex)
     } else {
-      out.push({ message: current, relatedIdxs: [current.idx] })
+      out.push(current)
     }
   }
   return out
@@ -104,7 +148,7 @@ export function TranscriptView({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const matchRangesRef = useRef<Range[]>([])
 
-  const displayMessages = useMemo(() => mergeAdjacentToolMessages(messages), [messages])
+  const displayMessages = useMemo(() => mergeToolMessages(messages), [messages])
   const visibleDisplayMessages = useMemo(() => {
     if (roleFilters.size === 0) return displayMessages
     return displayMessages.filter(({ message }) => roleFilters.has(message.role))
@@ -436,8 +480,8 @@ export function TranscriptView({
       )}
 
       <div className="transcript-scroll" ref={scrollRef}>
-        {visibleDisplayMessages.map(({ message, relatedIdxs }) => (
-          <div key={message.idx} data-idx={relatedIdxs.join(' ')}>
+        {visibleDisplayMessages.map(({ key, message, relatedIdxs }) => (
+          <div key={key} data-idx={relatedIdxs.join(' ')}>
             <MessageItem message={message} />
           </div>
         ))}
