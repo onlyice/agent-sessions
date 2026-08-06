@@ -18,6 +18,8 @@ interface Props {
   jumpNonce?: number
   /** When set, display this sub-agent's transcript instead of the main session. */
   subAgent?: SubAgentMeta
+  /** Incremented after reindexing so an open transcript reloads from its source. */
+  revision?: number
   onSelectSubAgent?: (sa: SubAgentMeta) => void
   onBackToParent?: () => void
 }
@@ -242,6 +244,7 @@ export function TranscriptView({
   jumpQuery,
   jumpNonce,
   subAgent,
+  revision,
   onSelectSubAgent,
   onBackToParent
 }: Props): React.JSX.Element {
@@ -397,7 +400,7 @@ export function TranscriptView({
     return () => {
       alive = false
     }
-  }, [sessionId, subAgent])
+  }, [sessionId, subAgent, revision])
 
   // Jump to a message (from a sidebar search hit): open the collapsed blocks
   // holding the query's matches, highlight them, and scroll to the matched

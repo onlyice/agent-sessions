@@ -34,6 +34,7 @@ export default function App(): React.JSX.Element {
   const [hits, setHits] = useState<SearchHit[] | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [progress, setProgress] = useState<IndexProgress | null>(null)
+  const [transcriptRevision, setTranscriptRevision] = useState(0)
   const [searching, setSearching] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [vaults, setVaults] = useState<Vault[]>([])
@@ -182,6 +183,7 @@ export default function App(): React.JSX.Element {
       if (p.phase === 'done') {
         reindexing.current = false
         refresh()
+        setTranscriptRevision((revision) => revision + 1)
         scheduleReindex()
         setTimeout(() => setProgress(null), 1500)
       } else {
@@ -346,6 +348,7 @@ export default function App(): React.JSX.Element {
             jumpQuery={selection.jumpQuery}
             jumpNonce={selection.jumpNonce}
             subAgent={selection.subAgent}
+            revision={transcriptRevision}
             onSelectSubAgent={(sa) =>
               pick({ sessionId: selection.sessionId, subAgent: sa })
             }
