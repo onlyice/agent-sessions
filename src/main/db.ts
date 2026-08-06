@@ -1,5 +1,27 @@
 import Database from 'better-sqlite3'
-import type { Message, Role, SessionMeta, SubAgentMeta } from './types'
+import { createHash } from 'crypto'
+import type { AgentType, Message, Role, SessionMeta, SubAgentMeta } from './types'
+
+export interface IndexedSession {
+  mtime: number
+  title: string
+  agent: AgentType
+}
+
+/**
+ * Fingerprint a transcript's indexable content. Used to skip needless FTS
+ * rewrites, and handed to the renderer so a background refresh can tell "same
+ * transcript" without shipping (or stringifying) megabytes of messages.
+ */
+export function hashMessages(messages: Message[]): string {
+  const h = createHash('sha1')
+  for (const m of messages) {
+    h.update(`${m.idx}|${m.role}|${m.timestamp ?? ''}|${m.blocks.length}|`)
+    h.update(m.text)
+    h.update('\u0000')
+  }
+  return h.digest('hex')
+}
 
 export interface SearchHit {
   sessionId: string
@@ -46,7 +68,8 @@ export class IndexDB {
         messageCount INTEGER NOT NULL,
         sourcePath  TEXT NOT NULL,
         mtime       INTEGER NOT NULL,
-        subAgents   TEXT NOT NULL DEFAULT '[]'
+        subAgents   TEXT NOT NULL DEFAULT '[]',
+        contentHash TEXT NOT NULL DEFAULT ''
       );
 
       CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updatedAt DESC);
@@ -71,6 +94,12 @@ export class IndexDB {
       this.db.exec("ALTER TABLE sessions ADD COLUMN vaultId TEXT NOT NULL DEFAULT 'default'")
     }
 
+    // Migration: add contentHash if missing. An empty hash never matches a real
+    // one, so existing rows simply rewrite their FTS entries once.
+    if (!cols.some((c) => c.name === 'contentHash')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN contentHash TEXT NOT NULL DEFAULT ''")
+    }
+
     // Created after the migration above so the column is guaranteed to exist.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_vault ON sessions(vaultId)')
 
@@ -88,23 +117,16 @@ export class IndexDB {
     `)
   }
 
-  /** Returns a map of sessionId -> mtime for everything indexed in a vault. */
-  indexedMtimes(vaultId: string): Map<string, number> {
+  /**
+   * Everything indexed in a vault, keyed by session id: `mtime` is the cheap
+   * transcript version marker, `title` catches metadata-only renames, and
+   * `agent` lets the indexer prune per collector.
+   */
+  indexedSessions(vaultId: string): Map<string, IndexedSession> {
     const rows = this.db
-      .prepare('SELECT id, mtime FROM sessions WHERE vaultId = ?')
-      .all(vaultId) as {
-      id: string
-      mtime: number
-    }[]
-    return new Map(rows.map((r) => [r.id, r.mtime]))
-  }
-
-  /** Returns the indexed title for each session so metadata-only changes are detected. */
-  indexedTitles(vaultId: string): Map<string, string> {
-    const rows = this.db
-      .prepare('SELECT id, title FROM sessions WHERE vaultId = ?')
-      .all(vaultId) as { id: string; title: string }[]
-    return new Map(rows.map((r) => [r.id, r.title]))
+      .prepare('SELECT id, mtime, title, agent FROM sessions WHERE vaultId = ?')
+      .all(vaultId) as (IndexedSession & { id: string })[]
+    return new Map(rows.map((r) => [r.id, { mtime: r.mtime, title: r.title, agent: r.agent }]))
   }
 
   removeSession(id: string): void {
@@ -128,20 +150,41 @@ export class IndexDB {
     tx(vaultId)
   }
 
-  /** Insert or replace a session and all of its messages atomically. */
-  upsertSession(meta: SessionMeta, mtime: number, messages: Message[]): void {
+  /**
+   * Insert or replace a session and all of its messages atomically. Rewriting
+   * the FTS rows is by far the expensive part, so it is skipped when the
+   * transcript's content hash is unchanged — a session can be re-upserted just
+   * because its metadata moved, or because it was opened twice in the UI.
+   */
+  upsertSession(
+    meta: SessionMeta,
+    mtime: number,
+    messages: Message[],
+    contentHash = hashMessages(messages)
+  ): void {
+    const previous = this.db.prepare('SELECT contentHash FROM sessions WHERE id = ?').get(meta.id) as
+      | { contentHash: string }
+      | undefined
+    const messagesUnchanged = previous != null && previous.contentHash === contentHash
+
     const insertSession = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (id, vaultId, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime, subAgents)
-      VALUES (@id, @vaultId, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime, @subAgents)
+        (id, vaultId, agent, nativeId, cwd, title, createdAt, updatedAt, messageCount, sourcePath, mtime, subAgents, contentHash)
+      VALUES (@id, @vaultId, @agent, @nativeId, @cwd, @title, @createdAt, @updatedAt, @messageCount, @sourcePath, @mtime, @subAgents, @contentHash)
     `)
     const insertMsg = this.db.prepare(`
       INSERT INTO messages_fts (text, sessionId, idx, role, timestamp)
       VALUES (?, ?, ?, ?, ?)
     `)
     const tx = this.db.transaction(() => {
+      insertSession.run({
+        ...meta,
+        mtime,
+        contentHash,
+        subAgents: JSON.stringify(meta.subAgents ?? [])
+      })
+      if (messagesUnchanged) return
       this.db.prepare('DELETE FROM messages_fts WHERE sessionId = ?').run(meta.id)
-      insertSession.run({ ...meta, mtime, subAgents: JSON.stringify(meta.subAgents ?? []) })
       for (const m of messages) {
         if (!m.text) continue
         insertMsg.run(m.text, meta.id, m.idx, m.role, m.timestamp)

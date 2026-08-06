@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { join, basename } from 'path'
-import type { Block, Collector, Message, Role, SessionMeta, SubAgentMeta } from '../types'
+import type { Block, Collector, ListResult, Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
 
 const rootFor = (home: string): string => join(home, '.claude', 'projects')
@@ -98,13 +98,13 @@ async function parse(path: string): Promise<Message[]> {
 export const claudeCollector: Collector = {
   agent: 'claude',
 
-  async list(home: string): Promise<SessionMeta[]> {
+  async list(home: string): Promise<ListResult> {
     const root = rootFor(home)
     let projectDirs: string[]
     try {
       projectDirs = await fs.readdir(root)
     } catch {
-      return []
+      return { metas: [] }
     }
     const out: SessionMeta[] = []
     for (const dir of projectDirs) {
@@ -127,7 +127,7 @@ export const claudeCollector: Collector = {
         }
       }
     }
-    return out
+    return { metas: out }
   },
 
   load: parse

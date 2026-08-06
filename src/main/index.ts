@@ -4,6 +4,7 @@ import { IndexDB } from './db'
 import { registerIpc } from './ipc'
 import { reindex } from './indexer'
 import { getVaults } from './vaults'
+import { ensureUserPath } from './user-path'
 
 let mainWindow: BrowserWindow | null = null
 let db: IndexDB | null = null
@@ -48,6 +49,9 @@ app.whenReady().then(() => {
   // Build/refresh the index in the background after the window is up.
   mainWindow?.webContents.once('did-finish-load', async () => {
     try {
+      // Agent CLIs live outside launchd's PATH; resolve the user's real one
+      // before any collector shells out (see user-path.ts).
+      await ensureUserPath()
       const stats = await reindex(db!, await getVaults(), (p) =>
         mainWindow?.webContents.send('reindex:progress', p)
       )

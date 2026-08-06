@@ -9,15 +9,27 @@ export interface IndexProgress {
   total: number
 }
 
+interface VaultScan {
+  vault: Vault
+  metas: SessionMeta[]
+  /** Agents whose scan was incomplete; their existing rows must not be pruned. */
+  partialAgents: Set<AgentType>
+}
+
 /** Scan every collector for one vault, tagging metas with the vault id. */
-async function listVault(vault: Vault): Promise<SessionMeta[]> {
+async function listVault(vault: Vault): Promise<VaultScan> {
+  const partialAgents = new Set<AgentType>()
   const metas = (
     await Promise.all(
       (Object.keys(collectors) as AgentType[]).map(async (agent) => {
         try {
-          return await collectors[agent].list(vault.home)
+          const result = await collectors[agent].list(vault.home)
+          if (result.partial) partialAgents.add(agent)
+          return result.metas
         } catch (err) {
           console.error(`[indexer] ${agent} list failed for vault ${vault.id}:`, err)
+          // A failed scan says nothing about what still exists on disk.
+          partialAgents.add(agent)
           return []
         }
       })
@@ -28,7 +40,7 @@ async function listVault(vault: Vault): Promise<SessionMeta[]> {
     m.vaultId = vault.id
     m.id = `${vault.id}:${m.id}`
   }
-  return metas
+  return { vault, metas, partialAgents }
 }
 
 /**
@@ -46,16 +58,14 @@ export async function reindex(
   onProgress?.({ phase: 'scanning', indexed: 0, total: 0 })
 
   // Gather metadata for all vaults first so we know the total up front.
-  const perVault = await Promise.all(
-    vaults.map(async (v) => ({ vault: v, metas: await listVault(v) }))
-  )
+  const perVault = await Promise.all(vaults.map(listVault))
 
   const stale = perVault.flatMap(({ vault, metas }) => {
-    const existing = db.indexedMtimes(vault.id)
-    const titles = db.indexedTitles(vault.id)
-    return metas.filter(
-      (m) => existing.get(m.id) !== m.updatedAt || titles.get(m.id) !== m.title
-    )
+    const indexed = db.indexedSessions(vault.id)
+    return metas.filter((m) => {
+      const row = indexed.get(m.id)
+      return row?.mtime !== m.updatedAt || row.title !== m.title
+    })
   })
 
   let indexed = 0
@@ -77,11 +87,14 @@ export async function reindex(
     }
   }
 
-  // Prune sessions that no longer exist on disk, per vault.
-  for (const { vault, metas } of perVault) {
+  // Prune sessions that no longer exist on disk, per vault. Agents that
+  // reported a partial scan are left alone: a transient CLI or network failure
+  // must never wipe an agent's history (and its search index) from the app.
+  for (const { vault, metas, partialAgents } of perVault) {
     const seen = new Set(metas.map((m) => m.id))
-    for (const id of db.indexedMtimes(vault.id).keys()) {
-      if (!seen.has(id)) db.removeSession(id)
+    for (const [id, row] of db.indexedSessions(vault.id)) {
+      if (seen.has(id) || partialAgents.has(row.agent)) continue
+      db.removeSession(id)
     }
   }
 

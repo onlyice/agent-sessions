@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ArrowLeft, Bot, ChevronDown, ChevronUp, Copy, Download, Play, Search, X } from 'lucide-react'
 import { api } from '../api'
@@ -149,6 +149,15 @@ function mergeToolMessages(messages: Message[]): DisplayMessage[] {
   return out
 }
 
+/** A reload folded into an already-open transcript. */
+interface BackgroundRefresh {
+  meta: SessionMeta | null
+  messages: Message[]
+  contentHash: string
+  /** The source is byte-identical to what the view already holds. */
+  unchanged?: boolean
+}
+
 /** Cap highlighted ranges to avoid browser paint stalls on short queries. */
 const MAX_HIGHLIGHTS = 500
 
@@ -269,6 +278,12 @@ export function TranscriptView({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const matchRangesRef = useRef<Range[]>([])
   const scrollAnimRef = useRef(0)
+  const messagesRef = useRef<Message[]>([])
+  const contentHashRef = useRef('')
+  const loadedTranscriptRef = useRef('')
+  const handledRevisionRef = useRef(revision)
+  const followBottomAfterRefreshRef = useRef(false)
+  const handledJumpRef = useRef('')
 
   /**
    * Scroll a match into view with a short, cancellable animation. Accepts a
@@ -376,31 +391,114 @@ export function TranscriptView({
     return new Set([...searchExpandIds, ...jumpExpandIds])
   }, [searchExpandIds, jumpExpandIds])
 
+  const transcriptKey = `${sessionId}:${subAgent?.sourcePath ?? ''}`
+
+  /**
+   * Fold a background reload into the open transcript. The main process
+   * compares content hashes, so an unchanged refresh costs no transfer and,
+   * more importantly, never re-renders the messages the user is reading.
+   */
+  const applyBackgroundRefresh = useCallback((key: string, res: BackgroundRefresh): void => {
+    if (loadedTranscriptRef.current !== key) return
+    if (res.meta) setMeta(res.meta)
+    if (res.unchanged || res.contentHash === contentHashRef.current) return
+    if (res.messages.length === 0 && messagesRef.current.length > 0) return
+
+    const scroller = scrollRef.current
+    followBottomAfterRefreshRef.current = Boolean(
+      scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 32
+    )
+    messagesRef.current = res.messages
+    contentHashRef.current = res.contentHash
+    setMessages(res.messages)
+  }, [])
+
   useEffect(() => {
     let alive = true
     setLoading(true)
+    const adopt = (messages: Message[], contentHash: string): void => {
+      messagesRef.current = messages
+      contentHashRef.current = contentHash
+      loadedTranscriptRef.current = transcriptKey
+      setMessages(messages)
+      setLoading(false)
+    }
+
     if (subAgent) {
-      api.getSession(sessionId).then((sessionRes) => {
+      api.getSession(sessionId, { metaOnly: true }).then((sessionRes) => {
         if (!alive) return
         setMeta(sessionRes?.meta ?? null)
       })
       api.loadSubAgent(subAgent.sourcePath).then((res) => {
         if (!alive) return
-        setMessages(res?.messages ?? [])
-        setLoading(false)
+        adopt(res?.messages ?? [], res?.contentHash ?? '')
       })
     } else {
       api.getSession(sessionId).then((res) => {
         if (!alive) return
         setMeta(res?.meta ?? null)
-        setMessages(res?.messages ?? [])
-        setLoading(false)
+        adopt(res?.messages ?? [], res?.contentHash ?? '')
+
+        // Cached content makes opening immediate. Refresh Amp sessions in the
+        // background so assistant turns omitted by list timestamps still land;
+        // the collector skips the network entirely for settled threads.
+        if (res?.meta.agent === 'amp') {
+          void api
+            .getSession(sessionId, { fresh: true, knownHash: res.contentHash })
+            .then((freshRes) => {
+              if (!alive || !freshRes) return
+              applyBackgroundRefresh(transcriptKey, freshRes)
+            })
+        }
       })
     }
     return () => {
       alive = false
     }
-  }, [sessionId, subAgent, revision])
+  }, [sessionId, subAgent, transcriptKey, applyBackgroundRefresh])
+
+  // Reindex refreshes the open transcript in the background. Keep the current
+  // DOM mounted and only replace message state when the source really changed,
+  // otherwise an unchanged scan would interrupt reading and reset scrolling.
+  useEffect(() => {
+    if (handledRevisionRef.current === revision) return
+    if (loading || loadedTranscriptRef.current !== transcriptKey) return
+    handledRevisionRef.current = revision
+
+    let alive = true
+    const knownHash = contentHashRef.current
+    const load: Promise<BackgroundRefresh> = subAgent
+      ? Promise.all([
+          api.getSession(sessionId, { metaOnly: true }),
+          api.loadSubAgent(subAgent.sourcePath, knownHash)
+        ]).then(([sessionRes, subAgentRes]) => ({
+          meta: sessionRes?.meta ?? null,
+          messages: subAgentRes?.messages ?? [],
+          contentHash: subAgentRes?.contentHash ?? '',
+          unchanged: subAgentRes?.unchanged
+        }))
+      : api.getSession(sessionId, { fresh: true, knownHash }).then((res) => ({
+          meta: res?.meta ?? null,
+          messages: res?.messages ?? [],
+          contentHash: res?.contentHash ?? '',
+          unchanged: res?.unchanged
+        }))
+
+    void load.then((res) => {
+      if (!alive) return
+      applyBackgroundRefresh(transcriptKey, res)
+    })
+    return () => {
+      alive = false
+    }
+  }, [revision, sessionId, subAgent, transcriptKey, loading, applyBackgroundRefresh])
+
+  useLayoutEffect(() => {
+    if (!followBottomAfterRefreshRef.current) return
+    followBottomAfterRefreshRef.current = false
+    const scroller = scrollRef.current
+    if (scroller) scroller.scrollTop = scroller.scrollHeight
+  }, [messages])
 
   // Jump to a message (from a sidebar search hit): open the collapsed blocks
   // holding the query's matches, highlight them, and scroll to the matched
@@ -443,6 +541,10 @@ export function TranscriptView({
       CSS.highlights.set('transcript-search-current', new Highlight(ranges[0]))
     }
 
+    const jumpKey = `${transcriptKey}:${jumpNonce ?? 0}:${jumpTo}:${jumpQuery ?? ''}`
+    if (handledJumpRef.current === jumpKey) return
+    handledJumpRef.current = jumpKey
+
     // A precise range scrolls to the matched text itself, even inside a long
     // tool output that scrolls internally.
     animateScrollTo(ranges[0] ?? el, 'start')
@@ -460,6 +562,7 @@ export function TranscriptView({
     jumpExpandIds,
     highlightOwner,
     visibleDisplayMessages,
+    transcriptKey,
     animateScrollTo
   ])
 
