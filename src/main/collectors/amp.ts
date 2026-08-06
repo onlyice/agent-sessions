@@ -2,18 +2,31 @@ import { promises as fs } from 'fs'
 import { execFile } from 'child_process'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import type { Block, Collector, Message, Role, SessionMeta } from '../types'
-import { HOME, asText, deriveTitle, flatten, stringify, toMillis, truncate } from './util'
+import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
+import { resolveBin } from '../user-path'
+import { HOME, asText, deriveTitle, flatten, mapLimit, stringify, toMillis, truncate } from './util'
 
 const rootFor = (home: string): string => join(home, '.local', 'share', 'amp', 'threads')
 const cloudCacheRootFor = (home: string): string =>
   join(home, '.cache', 'agent-session-list', 'amp', 'threads')
+
+/** `updated` reported by the last successful `amp threads list`, per cache path. */
 const cloudUpdatedAt = new Map<string, number>()
 
-function runAmp(args: string[]): Promise<string> {
+/**
+ * Page through `amp threads list` until the server runs out. A request costs
+ * the same whatever the limit (CLI startup plus one round trip dominates), so
+ * the page is large and extra pages are the rare-case fallback.
+ */
+const CLOUD_PAGE_SIZE = 500
+const CLOUD_MAX_THREADS = 5000
+
+async function runAmp(args: string[]): Promise<string> {
+  // Resolved explicitly: a packaged app's PATH doesn't contain ~/.local/bin.
+  const bin = process.env.AMP_BIN || (await resolveBin('amp'))
   return new Promise((resolve, reject) => {
     execFile(
-      'amp',
+      bin,
       args,
       { encoding: 'utf8', maxBuffer: 100 * 1024 * 1024, timeout: 60_000 },
       (error, stdout) => (error ? reject(error) : resolve(stdout))
@@ -152,32 +165,92 @@ function parseThread(thread: any): Message[] {
   return messages
 }
 
+// --- Cloud threads ----------------------------------------------------------
+
 interface CloudCache {
+  /** `updated` from `amp threads list` at the time of the export. */
   remoteUpdatedAt: number
+  /** The thread's own `updatedAt`, which — unlike the above — assistant turns move. */
+  threadUpdatedAt?: number
   thread: unknown
 }
 
-async function loadCloudThread(path: string): Promise<any> {
-  const expectedUpdatedAt = cloudUpdatedAt.get(path)
+async function readCloudCache(path: string): Promise<CloudCache | undefined> {
   try {
-    const cached = JSON.parse(await fs.readFile(path, 'utf8')) as CloudCache
-    if (
-      cached &&
-      cached.thread &&
-      (expectedUpdatedAt == null || cached.remoteUpdatedAt === expectedUpdatedAt)
-    ) {
-      return cached.thread
-    }
+    const candidate = JSON.parse(await fs.readFile(path, 'utf8')) as CloudCache
+    return candidate?.thread ? candidate : undefined
   } catch {
-    // Missing, stale, or malformed caches are refreshed from Amp below.
+    // Missing or malformed caches are refreshed from Amp.
+    return undefined
+  }
+}
+
+/**
+ * `amp threads list` reports `updated` as the *last user message* time, so it
+ * can't tell us an assistant turn landed afterwards. A cached export is only
+ * provably current when it was captured at or after that timestamp *and* Amp had
+ * gone idle — any later work has to start with a new user message, which moves
+ * `updated` again and invalidates the cache the normal way.
+ */
+function isCurrent(cache: CloudCache, listUpdatedAt: number | undefined): boolean {
+  if (listUpdatedAt == null || cache.remoteUpdatedAt !== listUpdatedAt) return false
+  const thread = cache.thread as any
+  const capturedAt = cache.threadUpdatedAt ?? toMillis(thread?.updatedAt)
+  if (capturedAt == null || capturedAt < listUpdatedAt) return false
+  return thread?.meta?.lastKnownAgentState?.state === 'idle'
+}
+
+async function loadCloudThread(
+  path: string,
+  options?: { fresh?: boolean; allowStale?: boolean }
+): Promise<any> {
+  const expectedUpdatedAt = cloudUpdatedAt.get(path)
+  const cached = await readCloudCache(path)
+  // allowStale opens instantly from disk; otherwise only a provably current
+  // cache may skip the ~1.5s CLI round trip — even for an explicit refresh.
+  if (cached && (options?.allowStale || isCurrent(cached, expectedUpdatedAt))) {
+    return cached.thread
   }
 
   const nativeId = path.slice(path.lastIndexOf('/') + 1).replace(/\.json$/, '')
-  const thread = JSON.parse(await runAmp(['threads', 'export', nativeId]))
-  await fs.mkdir(cloudCacheRootFor(HOME), { recursive: true })
-  const cache: CloudCache = { remoteUpdatedAt: expectedUpdatedAt ?? Date.now(), thread }
-  await fs.writeFile(path, JSON.stringify(cache))
+  let thread: any
+  try {
+    thread = JSON.parse(await runAmp(['threads', 'export', nativeId]))
+  } catch (err) {
+    // A refresh should not blank an already available transcript just because
+    // Amp is temporarily offline or an export fails.
+    if (cached) return cached.thread
+    throw err
+  }
+  try {
+    await fs.mkdir(cloudCacheRootFor(HOME), { recursive: true })
+    const nextCache: CloudCache = {
+      // The export carries the same timestamp the listing reports, so a cache
+      // written before any listing still validates itself later.
+      remoteUpdatedAt: expectedUpdatedAt ?? toMillis(thread?.meta?.lastUserMessageAt) ?? 0,
+      threadUpdatedAt: toMillis(thread?.updatedAt) ?? undefined,
+      thread
+    }
+    await fs.writeFile(path, JSON.stringify(nextCache))
+  } catch (err) {
+    // The fresh export is still usable even if its local cache cannot be saved.
+    console.error('[amp] failed to cache server thread:', err)
+  }
   return thread
+}
+
+/** Drop cached exports for threads the server no longer lists (deleted/archived). */
+async function evictOrphanCaches(cacheRoot: string, live: Set<string>): Promise<void> {
+  try {
+    const files = await fs.readdir(cacheRoot)
+    await Promise.all(
+      files
+        .filter((file) => file.endsWith('.json') && !live.has(file.slice(0, -'.json'.length)))
+        .map((file) => fs.rm(join(cacheRoot, file), { force: true }))
+    )
+  } catch {
+    // Nothing cached yet, or the cache dir is unreadable — nothing to reclaim.
+  }
 }
 
 async function listCloudThreads(home: string): Promise<SessionMeta[]> {
@@ -185,38 +258,124 @@ async function listCloudThreads(home: string): Promise<SessionMeta[]> {
   // vaults still scan their own on-disk transcript directories only.
   if (home !== HOME) return []
 
-  const raw = await runAmp(['threads', 'list', '--json', '--limit', '100'])
-  const threads = JSON.parse(raw)
-  if (!Array.isArray(threads)) return []
-
   const cacheRoot = cloudCacheRootFor(home)
-  return threads.flatMap((thread: any): SessionMeta[] => {
-    if (!thread?.id) return []
-    const updatedAt = toMillis(thread.updated) ?? 0
-    const sourcePath = join(cacheRoot, `${thread.id}.json`)
-    cloudUpdatedAt.set(sourcePath, updatedAt)
-    return [
-      {
+  const out: SessionMeta[] = []
+  const seen = new Set<string>()
+  let complete = false
+
+  for (let offset = 0; offset < CLOUD_MAX_THREADS; offset += CLOUD_PAGE_SIZE) {
+    const page = JSON.parse(
+      await runAmp([
+        'threads',
+        'list',
+        '--json',
+        '--limit',
+        String(CLOUD_PAGE_SIZE),
+        '--offset',
+        String(offset)
+      ])
+    )
+    if (!Array.isArray(page) || page.length === 0) {
+      complete = true
+      break
+    }
+
+    const before = seen.size
+    for (const thread of page) {
+      if (!thread?.id || seen.has(thread.id)) continue
+      seen.add(thread.id)
+      const updatedAt = toMillis(thread.updated) ?? 0
+      const sourcePath = join(cacheRoot, `${thread.id}.json`)
+      cloudUpdatedAt.set(sourcePath, updatedAt)
+      out.push({
         id: `amp:${thread.id}`,
         vaultId: '',
         agent: 'amp',
         nativeId: thread.id,
         cwd: cwdFromUri(thread.tree),
         title: deriveTitle(thread.title || thread.id),
+        // The listing has no creation time; the thread's own `created` is only
+        // available once exported, and nothing in the UI reads createdAt.
         createdAt: updatedAt,
         updatedAt,
         messageCount: typeof thread.messageCount === 'number' ? thread.messageCount : 0,
         sourcePath,
         subAgents: []
-      }
-    ]
-  })
+      })
+    }
+    // A server that ignores --offset would repeat page one forever.
+    if (page.length < CLOUD_PAGE_SIZE || seen.size === before) {
+      complete = true
+      break
+    }
+  }
+
+  if (complete) void evictOrphanCaches(cacheRoot, seen)
+  else console.warn(`[amp] stopped listing server threads at ${CLOUD_MAX_THREADS}`)
+  return out
+}
+
+// --- Local threads ----------------------------------------------------------
+
+interface LocalEntry {
+  mtimeMs: number
+  size: number
+  /** Null for files with no usable messages, so they aren't re-parsed either. */
+  meta: SessionMeta | null
+}
+
+/**
+ * Parsing every legacy thread file on each scan costs ~14MB of JSON for metadata
+ * that only changes when the file does. Keyed by path, validated by mtime+size.
+ */
+const localCache = new Map<string, LocalEntry>()
+
+async function readLocalThread(path: string): Promise<LocalEntry | null> {
+  const stat = await fs.stat(path)
+  const hit = localCache.get(path)
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit
+
+  const thread = JSON.parse(await fs.readFile(path, 'utf8'))
+  const msgs = thread.messages ?? []
+  let meta: SessionMeta | null = null
+  if (msgs.length > 0) {
+    const firstUser = msgs.find(
+      (m: any) =>
+        (m.kind === 'user' || (m.kind == null && m.role === 'user')) &&
+        !m.content?.every?.((block: any) => block?.type === 'tool_result')
+    )
+    const firstText = firstUser ? asText(firstUser.content) : ''
+    const created = toMillis(thread.created)
+    const lastSent = msgs
+      .map(timestampFromAmpMessage)
+      .findLast((timestamp: number | null) => timestamp != null)
+    // cwd is not reliably stored in the thread; env may hold it.
+    const treePath = cwdFromUri(thread.env?.initial?.trees?.[0]?.uri)
+    meta = {
+      id: `amp:${thread.id}`,
+      vaultId: '',
+      agent: 'amp',
+      nativeId: thread.id,
+      cwd: thread.env?.initialWorkingDirectory ?? thread.env?.cwd ?? treePath,
+      title: deriveTitle(thread.title || firstText || truncate(thread.id, 60)),
+      createdAt: created ?? stat.birthtimeMs,
+      // Tool-result turns often have no timestamp, so mtime must remain part
+      // of the version marker while an active transcript is still growing.
+      updatedAt: Math.max(lastSent ?? 0, stat.mtimeMs),
+      messageCount: msgs.length,
+      sourcePath: path,
+      subAgents: []
+    }
+  }
+  const entry: LocalEntry = { mtimeMs: stat.mtimeMs, size: stat.size, meta }
+  localCache.set(path, entry)
+  return entry
 }
 
 export const ampCollector: Collector = {
   agent: 'amp',
 
-  async list(home: string): Promise<SessionMeta[]> {
+  async list(home: string): Promise<ListResult> {
     const root = rootFor(home)
     let files: string[] = []
     try {
@@ -225,61 +384,50 @@ export const ampCollector: Collector = {
       // Newer Amp versions keep canonical transcripts on the server, so the
       // absence of the legacy local directory is not an error.
     }
-    const out: SessionMeta[] = []
-    for (const file of files) {
-      const path = join(root, file)
-      try {
-        const thread = JSON.parse(await fs.readFile(path, 'utf8'))
-        const msgs = thread.messages ?? []
-        if (msgs.length === 0) continue
-        const stat = await fs.stat(path)
-        const firstUser = msgs.find(
-          (m: any) =>
-            (m.kind === 'user' || (m.kind == null && m.role === 'user')) &&
-            !m.content?.every?.((block: any) => block?.type === 'tool_result')
-        )
-        const firstText = firstUser ? asText(firstUser.content) : ''
-        const created = toMillis(thread.created)
-        const lastSent = msgs
-          .map(timestampFromAmpMessage)
-          .findLast((timestamp: number | null) => timestamp != null)
-        // cwd is not reliably stored in the thread; env may hold it.
-        const treePath = cwdFromUri(thread.env?.initial?.trees?.[0]?.uri)
-        const cwd = thread.env?.initialWorkingDirectory ?? thread.env?.cwd ?? treePath
-        out.push({
-          id: `amp:${thread.id}`,
-          vaultId: '',
-          agent: 'amp',
-          nativeId: thread.id,
-          cwd,
-          title: deriveTitle(thread.title || firstText || truncate(thread.id, 60)),
-          createdAt: created ?? stat.birthtimeMs,
-          // Tool-result turns often have no timestamp, so mtime must remain part
-          // of the version marker while an active transcript is still growing.
-          updatedAt: Math.max(lastSent ?? 0, stat.mtimeMs),
-          messageCount: msgs.length,
-          sourcePath: path,
-          subAgents: []
-        })
-      } catch {
-        /* ignore */
-      }
-    }
+    const local = (
+      await mapLimit(files, 8, async (file) => {
+        try {
+          const meta = (await readLocalThread(join(root, file)))?.meta
+          // Copied: the indexer rewrites id/vaultId on the objects it receives,
+          // which would corrupt the cached template on the next scan.
+          return meta ? { ...meta } : null
+        } catch {
+          // Exports are immutable, so an unreadable one stays unreadable —
+          // skipping it (rather than reporting a partial scan) is correct.
+          return null
+        }
+      })
+    ).filter((meta): meta is SessionMeta => meta != null)
+
+    let cloud: SessionMeta[] = []
+    let partial = false
     try {
-      const localIds = new Set(out.map((session) => session.nativeId))
-      const cloud = await listCloudThreads(home)
-      out.push(...cloud.filter((session) => !localIds.has(session.nativeId)))
+      cloud = await listCloudThreads(home)
     } catch (err) {
+      // Signalling a partial scan keeps the indexer from pruning every server
+      // thread just because Amp was offline or the CLI could not be found.
+      partial = true
       console.error('[amp] failed to list server threads:', err)
     }
-    return out
+
+    // The same thread can exist both as a legacy local file and on the server;
+    // keep whichever copy was touched last.
+    const byNativeId = new Map<string, SessionMeta>()
+    for (const meta of [...local, ...cloud]) {
+      const prev = byNativeId.get(meta.nativeId)
+      if (!prev || meta.updatedAt > prev.updatedAt) byNativeId.set(meta.nativeId, meta)
+    }
+    return { metas: [...byNativeId.values()], partial }
   },
 
-  async load(path: string): Promise<Message[]> {
+  async load(
+    path: string,
+    options?: { fresh?: boolean; allowStale?: boolean }
+  ): Promise<Message[]> {
     try {
       const isCloudCache = path.startsWith(cloudCacheRootFor(HOME) + '/')
       const thread = isCloudCache
-        ? await loadCloudThread(path)
+        ? await loadCloudThread(path, options)
         : JSON.parse(await fs.readFile(path, 'utf8'))
       return parseThread(thread)
     } catch {

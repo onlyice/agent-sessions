@@ -91,6 +91,16 @@ export interface VaultConfig {
   activeVaultId: string
 }
 
+export interface ListResult {
+  metas: SessionMeta[]
+  /**
+   * The scan couldn't see every session (a remote source was unreachable, the
+   * CLI is missing, …). The indexer then keeps this agent's existing rows
+   * instead of pruning them as "deleted from disk".
+   */
+  partial?: boolean
+}
+
 export interface Collector {
   agent: AgentType
   /**
@@ -98,9 +108,9 @@ export interface Collector {
    * `home` is the vault's home directory the agent's data dir lives under.
    * Emitted ids are `${agent}:${nativeId}`; the indexer adds the vault prefix.
    */
-  list(home: string): Promise<SessionMeta[]>
+  list(home: string): Promise<ListResult>
   /** Load the full transcript for one session by its source path. */
-  load(sourcePath: string): Promise<Message[]>
+  load(sourcePath: string, options?: { fresh?: boolean; allowStale?: boolean }): Promise<Message[]>
   /** Remote sources that should fetch and index their transcript only when opened. */
   loadOnDemand?(sourcePath: string): boolean
 }

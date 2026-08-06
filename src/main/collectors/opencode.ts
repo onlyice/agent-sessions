@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
-import type { Block, Collector, Message, Role, SessionMeta } from '../types'
+import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
 import { deriveTitle, flatten, stringify, toMillis, truncate } from './util'
 
 const storageFor = (home: string): string =>
@@ -113,7 +113,7 @@ async function parse(sessionPath: string): Promise<Message[]> {
 export const opencodeCollector: Collector = {
   agent: 'opencode',
 
-  async list(home: string): Promise<SessionMeta[]> {
+  async list(home: string): Promise<ListResult> {
     const storage = storageFor(home)
     const sessRoot = sessionDir(storage)
     const msgRoot = messageDir(storage)
@@ -121,7 +121,7 @@ export const opencodeCollector: Collector = {
     try {
       projectDirs = await fs.readdir(sessRoot)
     } catch {
-      return []
+      return { metas: [] }
     }
     const out: SessionMeta[] = []
     for (const proj of projectDirs) {
@@ -148,7 +148,7 @@ export const opencodeCollector: Collector = {
         })
       }
     }
-    return out
+    return { metas: out }
   },
 
   load: parse

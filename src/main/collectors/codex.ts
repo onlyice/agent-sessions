@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import Database from 'better-sqlite3'
-import type { Block, Collector, Message, Role, SessionMeta } from '../types'
+import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
 import { deriveTitle, flatten, parseJsonl, stringify, toMillis, truncate } from './util'
 
 const rootFor = (home: string): string => join(home, '.codex', 'sessions')
@@ -184,7 +184,7 @@ async function parse(path: string): Promise<Message[]> {
 export const codexCollector: Collector = {
   agent: 'codex',
 
-  async list(home: string): Promise<SessionMeta[]> {
+  async list(home: string): Promise<ListResult> {
     const files: string[] = []
     const [threadNames] = await Promise.all([loadThreadNames(home), walk(rootFor(home), files)])
     const out: SessionMeta[] = []
@@ -198,7 +198,7 @@ export const codexCollector: Collector = {
         /* ignore */
       }
     }
-    return out
+    return { metas: out }
   },
 
   load: parse

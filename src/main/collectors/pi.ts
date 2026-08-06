@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
-import type { Block, Collector, Message, Role, SessionMeta } from '../types'
+import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
 import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
 
 const rootFor = (home: string): string => join(home, '.pi', 'agent', 'sessions')
@@ -75,7 +75,7 @@ async function walk(dir: string, acc: string[]): Promise<void> {
 export const piCollector: Collector = {
   agent: 'pi',
 
-  async list(home: string): Promise<SessionMeta[]> {
+  async list(home: string): Promise<ListResult> {
     const files: string[] = []
     await walk(rootFor(home), files)
     const out: SessionMeta[] = []
@@ -124,7 +124,7 @@ export const piCollector: Collector = {
         /* ignore */
       }
     }
-    return out
+    return { metas: out }
   },
 
   load: parse

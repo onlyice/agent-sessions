@@ -16,11 +16,30 @@ interface SearchOptions {
   limit?: number
 }
 
+interface GetSessionOptions {
+  /** Bypass caches and re-fetch remote transcripts. */
+  fresh?: boolean
+  /** Fetch the session header only — `messages` comes back empty. */
+  metaOnly?: boolean
+  /** Hash of the transcript already held; unchanged content is not resent. */
+  knownHash?: string
+}
+
+/** `messages` is empty when `unchanged` is set — keep whatever is on screen. */
+interface TranscriptPayload {
+  messages: Message[]
+  contentHash: string
+  unchanged?: boolean
+}
+
 interface Api {
   agentLabels(): Promise<Record<AgentType, string>>
   listSessions(): Promise<SessionMeta[]>
-  getSession(id: string): Promise<{ meta: SessionMeta; messages: Message[] } | null>
-  loadSubAgent(sourcePath: string): Promise<{ messages: Message[] }>
+  getSession(
+    id: string,
+    options?: GetSessionOptions
+  ): Promise<(TranscriptPayload & { meta: SessionMeta }) | null>
+  loadSubAgent(sourcePath: string, knownHash?: string): Promise<TranscriptPayload>
   search(opts: SearchOptions): Promise<SearchHit[]>
   stats(): Promise<{ sessions: number; messages: number }>
   resume(id: string): Promise<{ ok: boolean; command: string; error?: string }>

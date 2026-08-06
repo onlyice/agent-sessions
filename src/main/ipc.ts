@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow, clipboard, dialog, shell } from 'electron'
 import { writeFile } from 'fs/promises'
 import { collectors, AGENT_LABELS } from './collectors'
-import type { IndexDB, SearchOptions } from './db'
+import { hashMessages, type IndexDB, type SearchOptions } from './db'
 import { reindex } from './indexer'
 import { buildResumeCommand, resumeInGhostty } from './resume'
 import {
@@ -17,23 +17,46 @@ import {
 } from './vaults'
 import type { AgentType } from './types'
 
+interface GetSessionOptions {
+  /** Bypass caches and re-fetch remote transcripts. */
+  fresh?: boolean
+  /** Return the session header only, skipping transcript loading entirely. */
+  metaOnly?: boolean
+  /** Content hash the caller already holds; identical content is not resent. */
+  knownHash?: string
+}
+
 export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('agents:labels', () => AGENT_LABELS)
 
   ipcMain.handle('sessions:list', async () => db.listSessions(await getActiveVaultId()))
 
-  ipcMain.handle('session:get', async (_e, id: string) => {
+  ipcMain.handle('session:get', async (_e, id: string, options: GetSessionOptions = {}) => {
     const meta = db.getSession(id)
     if (!meta) return null
+    // Sub-agent views only need the parent's header, not its transcript.
+    if (options.metaOnly) return { meta, messages: [], contentHash: '' }
+
     const collector = collectors[meta.agent as AgentType]
-    const messages = await collector.load(meta.sourcePath)
+    // A remote list timestamp can stop at the latest user turn while the
+    // assistant response is still being written. Open cached content quickly,
+    // then let the renderer request a fresh export in the background.
+    const messages = await collector.load(meta.sourcePath, {
+      fresh: options.fresh,
+      allowStale: !options.fresh
+    })
+    const contentHash = hashMessages(messages)
     let resolvedMeta = meta
     if (messages.length > 0 && collector.loadOnDemand?.(meta.sourcePath)) {
       // Once opened, make remote transcript content available to global search.
       resolvedMeta = { ...meta, messageCount: messages.length }
-      db.upsertSession(resolvedMeta, meta.updatedAt, messages)
+      db.upsertSession(resolvedMeta, meta.updatedAt, messages, contentHash)
     }
-    return { meta: resolvedMeta, messages }
+    // A background refresh that changed nothing skips the (multi-MB) transfer.
+    if (options.knownHash && options.knownHash === contentHash) {
+      return { meta: resolvedMeta, messages: [], contentHash, unchanged: true }
+    }
+    return { meta: resolvedMeta, messages, contentHash }
   })
 
   ipcMain.handle('search', async (_e, opts: SearchOptions) =>
@@ -70,12 +93,14 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     return { canceled: false, filePath: res.filePath }
   })
 
-  ipcMain.handle('subagent:load', async (_e, sourcePath: string) => {
+  ipcMain.handle('subagent:load', async (_e, sourcePath: string, knownHash?: string) => {
     try {
       const messages = await collectors.claude.load(sourcePath)
-      return { messages }
+      const contentHash = hashMessages(messages)
+      if (knownHash && knownHash === contentHash) return { messages: [], contentHash, unchanged: true }
+      return { messages, contentHash }
     } catch {
-      return { messages: [] }
+      return { messages: [], contentHash: '' }
     }
   })
 
