@@ -845,12 +845,14 @@ textarea {
   cursor: default;
 }
 
+/* Only a fixed set of properties applies to highlight pseudo-elements, and the
+   `background` shorthand is not among them — it has to be `background-color`. */
 ::highlight(transcript-search) {
-  background: var(--mark);
+  background-color: var(--mark);
   color: var(--mark-text);
 }
 ::highlight(transcript-search-current) {
-  background: var(--accent);
+  background-color: var(--accent);
   color: var(--on-accent);
 }
 
@@ -1030,11 +1032,16 @@ textarea {
   line-height: 1.45;
   padding: 7px 9px;
   overflow: auto;
+  /* Single-line values keep the <input> behavior: no wrapping, scroll instead. */
+  white-space: nowrap;
+  /* A <div> holding an empty value has no line box, so it would collapse to
+     its padding; an <input> always kept one line's height. */
+  min-height: calc(1.45em + 16px);
 }
 .tool-field-value.multi {
   max-height: 130px;
-  resize: vertical;
   white-space: pre;
+  margin: 0;
 }
 .tool-empty {
   padding: 9px 12px;

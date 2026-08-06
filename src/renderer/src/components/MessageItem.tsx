@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useContext, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Code, FileText, Image, Paperclip } from 'lucide-react'
 import type { Block, Message } from '../types'
 import { formatDuration, fullTime, messageLabel } from '../util'
+import { CollapseContext } from '../collapseContext'
 import { Markdown } from './Markdown'
 
 type TextView = 'markdown' | 'source'
@@ -23,34 +24,26 @@ function formatToolValue(value: unknown): string {
   }
 }
 
-function fieldRows(value: unknown, text: string): number {
-  const lineCount = text.length === 0 ? 1 : text.split('\n').length
-  if (typeof value === 'string') return lineCount >= 3 ? 3 : lineCount
-  return Math.min(Math.max(lineCount, 3), 12)
-}
-
 function ToolValueField({ name, value }: { name: string; value: unknown }): React.JSX.Element {
   const isText = typeof value === 'string'
   const text = formatToolValue(value)
   const isMultilineText = isText && text.includes('\n')
-  const shouldUseTextarea = isMultilineText || isRecord(value) || Array.isArray(value)
+  const shouldUseMultiline = isMultilineText || isRecord(value) || Array.isArray(value)
 
+  // Render values as plain elements rather than <input>/<textarea>: form
+  // control contents cannot be painted by the CSS Custom Highlight API (and
+  // <input> values aren't even text nodes), so tool-input parameters would
+  // never show up in search. With no form control left, <label> would be an
+  // empty shell, so this is a plain <div>.
   return (
-    <label className="tool-field">
+    <div className="tool-field">
       <span className="tool-field-name">{name}</span>
-      {shouldUseTextarea ? (
-        <textarea
-          className="tool-field-value multi"
-          readOnly
-          rows={fieldRows(value, text)}
-          spellCheck={false}
-          value={text}
-          wrap="off"
-        />
+      {shouldUseMultiline ? (
+        <pre className="tool-field-value multi">{text}</pre>
       ) : (
-        <input className="tool-field-value" readOnly spellCheck={false} value={text} />
+        <div className="tool-field-value">{text}</div>
       )}
-    </label>
+    </div>
   )
 }
 
@@ -281,6 +274,11 @@ function Collapsible({ children }: { children: React.ReactNode }): React.JSX.Ele
   const innerRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [overflowing, setOverflowing] = useState(false)
+  // A search match or a jump target inside this block forces it open, so the
+  // thing the user was pointed at can never sit behind the clip. The id lets
+  // TranscriptView name this block after locating a match in the DOM.
+  const id = useId()
+  const forced = useContext(CollapseContext).has(id)
 
   useLayoutEffect(() => {
     const el = innerRef.current
@@ -293,13 +291,14 @@ function Collapsible({ children }: { children: React.ReactNode }): React.JSX.Ele
     return () => ro.disconnect()
   }, [])
 
-  const collapsed = overflowing && !expanded
+  const collapsed = overflowing && !expanded && !forced
   return (
-    <div className="collapsible">
+    <div className="collapsible" data-collapsible-id={id}>
       <div className={`collapsible-clip${collapsed ? ' collapsed' : ''}`}>
         <div ref={innerRef}>{children}</div>
       </div>
-      {overflowing && (
+      {/* Hidden while forced open: the toggle could not honour a click. */}
+      {overflowing && !forced && (
         <button className="collapse-toggle" onClick={() => setExpanded((e) => !e)}>
           {expanded ? (
             <>

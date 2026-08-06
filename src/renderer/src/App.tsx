@@ -19,6 +19,10 @@ const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'opencode', 'amp', 'pi']
 interface Selection {
   sessionId: string
   jumpTo?: number
+  /** The query behind jumpTo, used to scroll to the matched text in the view. */
+  jumpQuery?: string
+  /** Monotonic counter so re-clicking the same hit re-triggers the jump. */
+  jumpNonce: number
   /** When set, view a sub-agent transcript instead of the main session. */
   subAgent?: SubAgentMeta
 }
@@ -46,6 +50,14 @@ export default function App(): React.JSX.Element {
   const reindexTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const reindexing = useRef(false)
   const reindexIntervalMinutes = useRef(settings.reindexIntervalMinutes)
+  const jumpNonceRef = useRef(0)
+
+  /** Select a session to view; every pick gets a fresh nonce so TranscriptView
+   * re-runs its jump even when the target (sessionId / jumpTo) is unchanged. */
+  const pick = useCallback((next: Omit<Selection, 'jumpNonce'>): void => {
+    jumpNonceRef.current += 1
+    setSelection({ ...next, jumpNonce: jumpNonceRef.current })
+  }, [])
 
   const clearReindexTimer = useCallback((): void => {
     clearTimeout(reindexTimer.current)
@@ -293,14 +305,14 @@ export default function App(): React.JSX.Element {
               groups={groupedHits}
               searching={searching}
               selection={selection}
-              onPick={(sessionId, jumpTo) => setSelection({ sessionId, jumpTo })}
+              onPick={(sessionId, jumpTo) => pick({ sessionId, jumpTo, jumpQuery: query })}
             />
           ) : (
             <SessionList
               sessions={visibleSessions}
               selection={selection}
-              onPick={(id) => setSelection({ sessionId: id })}
-              onPickSubAgent={(sessionId, sa) => setSelection({ sessionId, subAgent: sa })}
+              onPick={(id) => pick({ sessionId: id })}
+              onPickSubAgent={(sessionId, sa) => pick({ sessionId, subAgent: sa })}
             />
           )}
         </div>
@@ -331,12 +343,14 @@ export default function App(): React.JSX.Element {
           <TranscriptView
             sessionId={selection.sessionId}
             jumpTo={selection.jumpTo}
+            jumpQuery={selection.jumpQuery}
+            jumpNonce={selection.jumpNonce}
             subAgent={selection.subAgent}
             onSelectSubAgent={(sa) =>
-              setSelection({ sessionId: selection.sessionId, subAgent: sa })
+              pick({ sessionId: selection.sessionId, subAgent: sa })
             }
             onBackToParent={() =>
-              setSelection({ sessionId: selection.sessionId })
+              pick({ sessionId: selection.sessionId })
             }
           />
         ) : (

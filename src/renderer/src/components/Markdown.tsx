@@ -18,10 +18,15 @@ export function Markdown({ text, className }: { text: string; className?: string
     const rendered = marked.parse(text, { async: false }) as string
     return DOMPurify.sanitize(rendered)
   }, [text])
+  // A fresh `{ __html }` object per render would make React re-set innerHTML on
+  // every parent re-render, replacing the text nodes that search highlights
+  // (CSS Custom Highlight ranges) point at. Cache the props object so React
+  // can tell the content is unchanged.
+  const dangerouslySetInnerHTML = useMemo(() => ({ __html: html }), [html])
   return (
     <div
       className={`md${className ? ' ' + className : ''}`}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={dangerouslySetInnerHTML}
     />
   )
 }
