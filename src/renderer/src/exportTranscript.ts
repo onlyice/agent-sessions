@@ -64,6 +64,12 @@ body { overflow: auto; }
 }
 .transcript-head { overflow: visible; padding-top: 20px; }
 .transcript-scroll { overflow: visible; contain: none; will-change: auto; }
+/* Blocks holding a search match are forced open so the match is not clipped
+   away; their toggle hides because it could not honour a click. Mirrors the
+   CollapseContext behaviour in the app. */
+.collapsible-clip.collapsed.force-expand { max-height: none; overflow: visible; }
+.collapsible-clip.collapsed.force-expand::after { display: none; }
+.collapsible-clip.force-expand ~ .collapse-toggle { display: none; }
 .export-subagents { display: block; }
 .has-export-subagents .th-subagents { display: flex; }
 .has-export-subagents .export-subagent-back:not([hidden]) { display: flex; }
@@ -149,6 +155,7 @@ const EXPORT_SCRIPT = `
   function runSearch() {
     CSS.highlights?.delete('transcript-export-search');
     CSS.highlights?.delete('transcript-export-current');
+    document.querySelectorAll('.force-expand').forEach((el) => el.classList.remove('force-expand'));
     matches = []; current = 0;
     const query = searchInput?.value.trim().toLowerCase() || '';
     document.querySelectorAll('[data-search-prev], [data-search-next]').forEach((button) => button.disabled = !query);
@@ -171,13 +178,24 @@ const EXPORT_SCRIPT = `
       }
     });
     document.querySelectorAll('[data-search-prev], [data-search-next]').forEach((button) => button.disabled = matches.length === 0);
+    // Unclip only the blocks that hold a match, so the rest of the transcript
+    // keeps its reading position instead of reflowing on the first keystroke.
+    matches.forEach((range) => {
+      range.startContainer.parentElement?.closest('.collapsible-clip')?.classList.add('force-expand');
+    });
     if (matches.length) {
       CSS.highlights?.set('transcript-export-search', new Highlight(...matches.slice(0, 500)));
       showCurrent();
     } else if (searchCount) searchCount.textContent = 'No matches';
   }
-  function openSearch() { searchBar.hidden = false; searchInput?.focus(); searchInput?.select(); }
-  function closeSearch() { searchBar.hidden = true; if (searchInput) searchInput.value = ''; runSearch(); }
+  function openSearch() {
+    searchBar.hidden = false;
+    searchInput?.focus(); searchInput?.select();
+  }
+  function closeSearch() {
+    searchBar.hidden = true;
+    if (searchInput) searchInput.value = ''; runSearch();
+  }
 
   document.addEventListener('click', (event) => {
     const target = event.target.closest('button');
@@ -240,13 +258,24 @@ export async function buildTranscriptHtml(root: HTMLElement, title: string): Pro
   const rootStyle = document.documentElement.getAttribute('style') ?? ''
   const mode = document.documentElement.dataset.mode ?? 'dark'
   const css = await documentCss()
+  // The export is opened in whatever browser the user has set as default, and
+  // custom-property support inside highlight pseudo-elements is uneven across
+  // engines. Inline the resolved palette so the highlight cannot come out
+  // unpainted. (In-app the same rules live in styles.css and use var() — there
+  // the engine is always the bundled Chromium.)
+  const rootComputed = getComputedStyle(document.documentElement)
+  const color = (name: string, fallback: string): string =>
+    rootComputed.getPropertyValue(name).trim() || fallback
+  const highlightCss =
+    `::highlight(transcript-export-search){background-color:${color('--mark', '#f5d76e')};color:${color('--mark-text', '#1a1a1a')}` +
+    `}::highlight(transcript-export-current){background-color:${color('--accent', '#d97757')};color:${color('--on-accent', '#1a1a1a')}}`
   return `<!doctype html>
 <html lang="en" data-mode="${escapeHtml(mode)}" style="${escapeHtml(rootStyle)}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escapeHtml(title)}</title>
-<style>${css}\n${EXPORT_CSS}\n::highlight(transcript-export-search){background:var(--mark);color:var(--mark-text)}::highlight(transcript-export-current){background:var(--accent);color:var(--on-accent)}</style>
+<style>${css}\n${EXPORT_CSS}\n${highlightCss}</style>
 </head>
 <body>${clone.outerHTML}<script>${EXPORT_SCRIPT}</script></body>
 </html>`
