@@ -24,10 +24,31 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build and package
-        run: pnpm exec electron-vite build && pnpm exec electron-builder --mac --publish never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: pnpm exec electron-vite build
+
+      # Packaged one arch at a time on purpose: electron-builder rebuilds the
+      # native better-sqlite3 binding for the target arch at the start of each
+      # invocation, so sequential runs guarantee each app bundle ships the
+      # matching binding.
+      - name: Package (arm64)
+        run: pnpm exec electron-builder --mac --arm64 --publish never
+
+      - name: Package (x64)
+        run: pnpm exec electron-builder --mac --x64 --publish never
+
+      - name: Verify architectures
+        run: |
+          set -euo pipefail
+          check() {
+            local app="$1" want="$2"
+            file "${app}/Contents/MacOS/Agent Sessions" | grep -q "$want" \
+              || { echo "::error::${app} main binary is not ${want}"; exit 1; }
+            file "${app}/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node" \
+              | grep -q "$want" || { echo "::error::${app} better-sqlite3 is not ${want}"; exit 1; }
+          }
+          check "dist/mac-arm64/Agent Sessions.app" arm64
+          check "dist/mac/Agent Sessions.app" x86_64
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -55,3 +76,47 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.zip
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: onlyice/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      - name: Bump cask
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}"
+
+          curl -fsSL -o arm64.dmg "${base}/Agent.Sessions-${version}-arm64.dmg"
+          curl -fsSL -o x64.dmg   "${base}/Agent.Sessions-${version}-x64.dmg"
+          sha_arm="$(shasum -a 256 arm64.dmg | cut -d' ' -f1)"
+          sha_intel="$(shasum -a 256 x64.dmg | cut -d' ' -f1)"
+          rm -f arm64.dmg x64.dmg
+
+          cask=Casks/agent-sessions.rb
+          sed -i -E \
+            -e "s|^( *version )\"[^\"]*\"|\1\"${version}\"|" \
+            -e "s|^( *sha256 arm: *)\"[^\"]*\"|\1\"${sha_arm}\"|" \
+            -e "s|^( *intel: *)\"[^\"]*\"|\1\"${sha_intel}\"|" \
+            "$cask"
+
+          grep -q "$version"   "$cask" || { echo "version not written"; exit 1; }
+          grep -q "$sha_arm"   "$cask" || { echo "arm64 sha not written"; exit 1; }
+          grep -q "$sha_intel" "$cask" || { echo "x64 sha not written"; exit 1; }
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$cask"
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+            exit 0
+          fi
+          git commit -m "agent-sessions ${version}"
+          git push

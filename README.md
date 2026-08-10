@@ -21,11 +21,27 @@
 
 ## 安装
 
-在 macOS 终端运行以下命令，即可自动下载并安装最新版本到 `/Applications`。安装脚本会在完成后通过 `xattr` 移除 macOS 的 quarantine 标记，避免出现无法验证开发者的安全提醒。
+需要 macOS 12（Monterey）及以上，Apple Silicon 与 Intel 均支持。
+
+### Homebrew（推荐）
+
+```bash
+brew install --cask onlyice/tap/agent-sessions
+```
+
+后续升级：
+
+```bash
+brew upgrade --cask agent-sessions
+```
+
+### 安装脚本
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/onlyice/agent-sessions/refs/heads/main/install.sh | bash
 ```
+
+两种方式都会自动下载对应架构的版本并安装到 `/Applications`，随后通过 `xattr` 移除 macOS 的 quarantine 标记——本应用只做了 ad-hoc 签名、未经 Apple 公证，不移除的话 Gatekeeper 会提示"无法验证开发者"。
 
 ## 技术栈
 
