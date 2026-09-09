@@ -1,12 +1,62 @@
 import { collectors } from './collectors'
-import type { IndexDB } from './db'
-import type { AgentType, SessionMeta, Vault } from './types'
+import type { IndexDB, ScanCacheRow } from './db'
+import type { AgentType, ScanCache, SessionMeta, Vault } from './types'
 
 export interface IndexProgress {
   phase: 'scanning' | 'indexing' | 'done'
   agent?: AgentType
   indexed: number
   total: number
+  /** On the 'done' event: whether this pass wrote or removed anything. */
+  changed?: boolean
+}
+
+export interface IndexResult {
+  /** Sessions whose transcript was (re)read and indexed. */
+  indexed: number
+  /** Sessions dropped because they no longer exist on disk. */
+  removed: number
+  /** Whether this pass wrote or removed anything at all. */
+  changed: boolean
+  durationMs: number
+}
+
+/** At most one progress event per this many ms, so the UI isn't flooded. */
+const PROGRESS_INTERVAL_MS = 150
+
+/**
+ * Remembers what each source file looked like the last time it was scanned, so
+ * an unchanged file never has to be read and parsed again. This is what keeps a
+ * periodic rescan cheap: without it every pass re-parses every transcript on
+ * disk — gigabytes of JSONL — just to rediscover that nothing moved.
+ */
+class SessionScanCache implements ScanCache {
+  private readonly upserts = new Map<string, ScanCacheRow>()
+  private readonly seen = new Set<string>()
+
+  constructor(private readonly entries: Map<string, ScanCacheRow>) {}
+
+  get(sourcePath: string, fileMtime: number, fileSize: number): SessionMeta | undefined {
+    this.seen.add(sourcePath)
+    const row = this.entries.get(sourcePath)
+    return row?.fileMtime === fileMtime && row.fileSize === fileSize ? row.meta : undefined
+  }
+
+  set(sourcePath: string, fileMtime: number, fileSize: number, meta: SessionMeta): void {
+    this.seen.add(sourcePath)
+    const row: ScanCacheRow = { fileMtime, fileSize, meta }
+    this.entries.set(sourcePath, row)
+    this.upserts.set(sourcePath, row)
+  }
+
+  get pendingWrites(): Map<string, ScanCacheRow> {
+    return this.upserts
+  }
+
+  /** Remembered paths no collector looked at this pass — gone from disk. */
+  get unseenPaths(): string[] {
+    return [...this.entries.keys()].filter((path) => !this.seen.has(path))
+  }
 }
 
 interface VaultScan {
@@ -17,13 +67,13 @@ interface VaultScan {
 }
 
 /** Scan every collector for one vault, tagging metas with the vault id. */
-async function listVault(vault: Vault): Promise<VaultScan> {
+async function listVault(vault: Vault, cache: ScanCache): Promise<VaultScan> {
   const partialAgents = new Set<AgentType>()
-  const metas = (
+  const scanned = (
     await Promise.all(
       (Object.keys(collectors) as AgentType[]).map(async (agent) => {
         try {
-          const result = await collectors[agent].list(vault.home)
+          const result = await collectors[agent].list(vault.home, cache)
           if (result.partial) partialAgents.add(agent)
           return result.metas
         } catch (err) {
@@ -36,10 +86,9 @@ async function listVault(vault: Vault): Promise<VaultScan> {
     )
   ).flat()
   // Namespace the id by vault so sessions from different vaults never collide.
-  for (const m of metas) {
-    m.vaultId = vault.id
-    m.id = `${vault.id}:${m.id}`
-  }
+  // Copied rather than mutated: these objects are owned by the scan cache and
+  // are handed back unchanged on the next pass.
+  const metas = scanned.map((m) => ({ ...m, vaultId: vault.id, id: `${vault.id}:${m.id}` }))
   return { vault, metas, partialAgents }
 }
 
@@ -54,11 +103,14 @@ export async function reindex(
   db: IndexDB,
   vaults: Vault[],
   onProgress?: (p: IndexProgress) => void
-): Promise<{ sessions: number; messages: number }> {
+): Promise<IndexResult> {
+  const startedAt = Date.now()
   onProgress?.({ phase: 'scanning', indexed: 0, total: 0 })
 
+  const cache = new SessionScanCache(db.readScanCache())
+
   // Gather metadata for all vaults first so we know the total up front.
-  const perVault = await Promise.all(vaults.map(listVault))
+  const perVault = await Promise.all(vaults.map((vault) => listVault(vault, cache)))
 
   const stale = perVault.flatMap(({ vault, metas }) => {
     const indexed = db.indexedSessions(vault.id)
@@ -69,20 +121,20 @@ export async function reindex(
   })
 
   let indexed = 0
+  let lastProgressAt = 0
   const total = stale.length
 
   for (const meta of stale) {
     try {
-      const collector = collectors[meta.agent]
-      const messages = collector.loadOnDemand?.(meta.sourcePath)
-        ? []
-        : await collector.load(meta.sourcePath)
+      const messages = await collectors[meta.agent].load(meta.sourcePath)
       db.upsertSession(meta, meta.updatedAt, messages)
     } catch (err) {
       console.error(`[indexer] failed to load ${meta.id}:`, err)
     }
     indexed++
-    if (indexed % 5 === 0 || indexed === total) {
+    const now = Date.now()
+    if (indexed === total || now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+      lastProgressAt = now
       onProgress?.({ phase: 'indexing', agent: meta.agent, indexed, total })
     }
   }
@@ -90,14 +142,23 @@ export async function reindex(
   // Prune sessions that no longer exist on disk, per vault. Agents that
   // reported a partial scan are left alone: a transient CLI or network failure
   // must never wipe an agent's history (and its search index) from the app.
+  let removed = 0
   for (const { vault, metas, partialAgents } of perVault) {
     const seen = new Set(metas.map((m) => m.id))
     for (const [id, row] of db.indexedSessions(vault.id)) {
       if (seen.has(id) || partialAgents.has(row.agent)) continue
       db.removeSession(id)
+      removed++
     }
   }
 
-  onProgress?.({ phase: 'done', indexed, total })
-  return db.stats()
+  // Forget cached scans of files nobody looked at — but only when every
+  // collector reported a complete scan, so a transient failure doesn't throw
+  // away work we'd have to redo.
+  const complete = perVault.every(({ partialAgents }) => partialAgents.size === 0)
+  db.writeScanCache(cache.pendingWrites, complete ? cache.unseenPaths : [])
+
+  const changed = total > 0 || removed > 0
+  onProgress?.({ phase: 'done', indexed, total, changed })
+  return { indexed, removed, changed, durationMs: Date.now() - startedAt }
 }

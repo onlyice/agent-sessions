@@ -1,6 +1,6 @@
 // Normalized data model shared across all agent collectors.
 
-export type AgentType = 'claude' | 'codex' | 'opencode' | 'amp' | 'pi'
+export type AgentType = 'claude' | 'codex' | 'opencode' | 'pi'
 
 export type Role = 'user' | 'assistant' | 'thinking' | 'tool' | 'system'
 
@@ -101,6 +101,21 @@ export interface ListResult {
   partial?: boolean
 }
 
+/**
+ * Memo of the previous scan, handed to collectors so an unchanged source file
+ * doesn't have to be read and parsed again. Building a SessionMeta means
+ * walking the whole transcript, and that is what makes a rescan expensive.
+ *
+ * Only cache metadata that is fully derived from the file itself: anything
+ * that can change while the file does not (a title stored elsewhere, say)
+ * must be re-applied by the collector after the lookup.
+ */
+export interface ScanCache {
+  /** The remembered meta for this file, or undefined if it changed since. */
+  get(sourcePath: string, fileMtime: number, fileSize: number): SessionMeta | undefined
+  set(sourcePath: string, fileMtime: number, fileSize: number, meta: SessionMeta): void
+}
+
 export interface Collector {
   agent: AgentType
   /**
@@ -108,9 +123,7 @@ export interface Collector {
    * `home` is the vault's home directory the agent's data dir lives under.
    * Emitted ids are `${agent}:${nativeId}`; the indexer adds the vault prefix.
    */
-  list(home: string): Promise<ListResult>
+  list(home: string, cache: ScanCache): Promise<ListResult>
   /** Load the full transcript for one session by its source path. */
-  load(sourcePath: string, options?: { fresh?: boolean; allowStale?: boolean }): Promise<Message[]>
-  /** Remote sources that should fetch and index their transcript only when opened. */
-  loadOnDemand?(sourcePath: string): boolean
+  load(sourcePath: string): Promise<Message[]>
 }

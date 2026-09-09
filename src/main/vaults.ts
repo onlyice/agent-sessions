@@ -12,7 +12,6 @@ const AGENT_DATA_DIRS: Record<AgentType, string> = {
   claude: join('.claude', 'projects'),
   codex: join('.codex', 'sessions'),
   opencode: join('.local', 'share', 'opencode', 'storage'),
-  amp: join('.local', 'share', 'amp', 'threads'),
   pi: join('.pi', 'agent', 'sessions')
 }
 

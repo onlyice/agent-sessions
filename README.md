@@ -9,7 +9,6 @@
 | **Claude Code** | `~/.claude/projects/<cwd>/<id>.jsonl` | `claude --resume <id>` |
 | **Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `codex resume <id>` |
 | **OpenCode** | `~/.local/share/opencode/storage/{session,message,part}` | `opencode --session <id>` |
-| **Amp** | `~/.local/share/amp/threads/T-*.json` | `amp threads continue <id>` |
 | **Pi** | `~/.pi/agent/sessions/<cwd>/<ts>_<id>.jsonl` | `pi --session <id>` |
 
 ## 功能
@@ -54,16 +53,22 @@ Electron + React + TypeScript + Vite（electron-vite），原生 `better-sqlite3
 ```
 src/main/                Electron 主进程（Node）
   collectors/            每个 agent 一个解析器，扫描磁盘并归一化
-    claude / codex / opencode / amp / pi.ts
+    claude / codex / opencode / pi.ts
   db.ts                  better-sqlite3 + FTS5(trigram) 索引与搜索
-  indexer.ts             增量索引（以 updatedAt 作为版本标记）
+  indexer.ts             增量索引（以 updatedAt 作为版本标记）+ 扫描缓存
+  indexer-worker.ts      索引进程入口（Electron utility process）
+  index-service.ts       主进程侧的索引调度：fork worker、串行化、失败回退
   resume.ts              生成 resume 命令 + 通过 AppleScript 打开 Ghostty 新 tab
   ipc.ts / index.ts      IPC 与窗口/生命周期
 src/preload/             contextBridge 暴露的安全 API
 src/renderer/            React UI（侧边栏 + transcript 视图 + 搜索）
 ```
 
-数据流：启动后主进程在后台跑 `reindex()`，把所有 transcript 写入用户目录下的 `index.db`（`app.getPath('userData')`）。会话列表/搜索读索引；打开会话时再按需从源文件解析完整 transcript（省内存）。点底栏 ↻ 可手动重新扫描。
+数据流：启动后在后台跑 `reindex()`，把所有 transcript 写入用户目录下的 `index.db`（`app.getPath('userData')`）。会话列表/搜索读索引；打开会话时再按需从源文件解析完整 transcript（省内存）。点底栏 ↻ 可手动重新扫描。
+
+索引不在主进程里跑。解析磁盘上几个 GB 的 JSONL 是纯 CPU 活，放主进程会阻塞所有 IPC 与窗口事件（表现就是"索引时整个 app 卡住"），因此它跑在一个常驻的 **utility process** 里，通过 WAL 与主进程共享同一个 SQLite 文件；万一该进程起不来或崩了，会自动退回主进程内执行，索引不会因此停摆。
+
+此外 `scan_cache` 表记住每个源文件上次扫描时的 `(mtime, size)` 与解析出的 meta：文件没变就直接复用，不再重读重解析。没有它的话，每隔几分钟的定时扫描都要把磁盘上所有 transcript 重新 parse 一遍。
 
 ## 开发与运行
 
@@ -112,4 +117,3 @@ pnpm run rebuild:sqlite     # 升级 Electron 后，单独重编 better-sqlite3
 
 - Codex 的 reasoning 内容多为加密（`encrypted_content`），只能展示有 summary 文本的部分。
 - Claude 的工程目录名是把 `/` 编码成 `-`（有损），cwd 优先取 transcript 内记录的真实 `cwd`，取不到时才回退解码目录名。
-- Amp thread 不一定记录 cwd；缺失时 resume 命令不带 `cd`（amp thread 是全局的，通常仍可继续）。

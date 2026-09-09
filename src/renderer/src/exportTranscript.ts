@@ -96,7 +96,14 @@ const EXPORT_SCRIPT = `
   const messageCount = document.querySelector('[data-export-message-count]');
   const subagentBack = document.querySelector('.export-subagent-back');
   const subagentLabel = document.querySelector('[data-export-subagent-label]');
-  const activeRoles = new Set();
+  // Start from whatever the app was filtered to; with no filter set, default to
+  // the conversation itself — an unfiltered export drowns in tool traffic.
+  const activeRoles = new Set(
+    [...document.querySelectorAll('[data-filter-role].on')]
+      .map((button) => button.dataset.filterRole)
+      .filter(Boolean)
+  );
+  if (activeRoles.size === 0) { activeRoles.add('user'); activeRoles.add('assistant'); }
   let matches = [], current = 0;
 
   function visibleMessages() {

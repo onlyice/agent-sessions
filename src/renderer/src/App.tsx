@@ -14,7 +14,7 @@ import { TranscriptView } from './components/TranscriptView'
 import { Settings } from './components/Settings'
 import { useSettings } from './settings'
 
-const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'opencode', 'amp', 'pi']
+const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'opencode', 'pi']
 
 interface Selection {
   sessionId: string
@@ -52,6 +52,8 @@ export default function App(): React.JSX.Element {
   const reindexing = useRef(false)
   const reindexIntervalMinutes = useRef(settings.reindexIntervalMinutes)
   const jumpNonceRef = useRef(0)
+  /** Fingerprint of the session list on screen; see refresh(). */
+  const sessionsSignature = useRef('')
 
   /** Select a session to view; every pick gets a fresh nonce so TranscriptView
    * re-runs its jump even when the target (sessionId / jumpTo) is unchanged. */
@@ -67,6 +69,14 @@ export default function App(): React.JSX.Element {
 
   const refresh = useCallback(async (): Promise<void> => {
     const list = await api.listSessions()
+    // A reindex that changed nothing still returns a brand-new array, and
+    // replacing state would re-render every card in a list thousands of rows
+    // long. Compare what the list actually shows before touching state.
+    const signature = list
+      .map((s) => [s.id, s.updatedAt, s.title, s.messageCount, s.subAgents.length].join('\u0000'))
+      .join('\u0001')
+    if (signature === sessionsSignature.current) return
+    sessionsSignature.current = signature
     setSessions(list)
   }, [])
 
@@ -133,6 +143,7 @@ export default function App(): React.JSX.Element {
       const cfg = await api.setActiveVault(id)
       setActiveVaultId(cfg.activeVaultId)
       // A vault switch changes the whole result set: drop the current view.
+      sessionsSignature.current = ''
       setSelection(null)
       setQuery('')
       setHits(null)
@@ -164,6 +175,7 @@ export default function App(): React.JSX.Element {
       setVaults(cfg.vaults)
       setActiveVaultId(cfg.activeVaultId)
       // The removed vault's sessions are gone; if it was active, reload the list.
+      sessionsSignature.current = ''
       setSelection(null)
       setHits(null)
       setQuery('')
@@ -183,7 +195,9 @@ export default function App(): React.JSX.Element {
       if (p.phase === 'done') {
         reindexing.current = false
         refresh()
-        setTranscriptRevision((revision) => revision + 1)
+        // Re-reading the open transcript costs a full parse plus a multi-MB
+        // transfer, so only do it when the pass actually touched something.
+        if (p.changed !== false) setTranscriptRevision((revision) => revision + 1)
         scheduleReindex()
         setTimeout(() => setProgress(null), 1500)
       } else {
@@ -360,7 +374,7 @@ export default function App(): React.JSX.Element {
           <div className="welcome">
             <h1>Agent Sessions</h1>
             <p>
-              Browsing transcripts from Claude Code, Codex, OpenCode, Amp and Pi. Select a session
+              Browsing transcripts from Claude Code, Codex, OpenCode and Pi. Select a session
               on the left, or search across everything.
             </p>
           </div>

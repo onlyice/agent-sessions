@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, clipboard, dialog, shell } from 'electron'
 import { writeFile } from 'fs/promises'
 import { collectors, AGENT_LABELS } from './collectors'
 import { hashMessages, type IndexDB, type SearchOptions } from './db'
-import { reindex } from './indexer'
+import type { IndexService } from './index-service'
 import { buildResumeCommand, resumeInGhostty } from './resume'
 import {
   addVault,
@@ -18,15 +18,17 @@ import {
 import type { AgentType } from './types'
 
 interface GetSessionOptions {
-  /** Bypass caches and re-fetch remote transcripts. */
-  fresh?: boolean
   /** Return the session header only, skipping transcript loading entirely. */
   metaOnly?: boolean
   /** Content hash the caller already holds; identical content is not resent. */
   knownHash?: string
 }
 
-export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null): void {
+export function registerIpc(
+  db: IndexDB,
+  indexer: IndexService,
+  getWindow: () => BrowserWindow | null
+): void {
   ipcMain.handle('agents:labels', () => AGENT_LABELS)
 
   ipcMain.handle('sessions:list', async () => db.listSessions(await getActiveVaultId()))
@@ -37,33 +39,18 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     // Sub-agent views only need the parent's header, not its transcript.
     if (options.metaOnly) return { meta, messages: [], contentHash: '' }
 
-    const collector = collectors[meta.agent as AgentType]
-    // A remote list timestamp can stop at the latest user turn while the
-    // assistant response is still being written. Open cached content quickly,
-    // then let the renderer request a fresh export in the background.
-    const messages = await collector.load(meta.sourcePath, {
-      fresh: options.fresh,
-      allowStale: !options.fresh
-    })
+    const messages = await collectors[meta.agent as AgentType].load(meta.sourcePath)
     const contentHash = hashMessages(messages)
-    let resolvedMeta = meta
-    if (messages.length > 0 && collector.loadOnDemand?.(meta.sourcePath)) {
-      // Once opened, make remote transcript content available to global search.
-      resolvedMeta = { ...meta, messageCount: messages.length }
-      db.upsertSession(resolvedMeta, meta.updatedAt, messages, contentHash)
-    }
     // A background refresh that changed nothing skips the (multi-MB) transfer.
     if (options.knownHash && options.knownHash === contentHash) {
-      return { meta: resolvedMeta, messages: [], contentHash, unchanged: true }
+      return { meta, messages: [], contentHash, unchanged: true }
     }
-    return { meta: resolvedMeta, messages, contentHash }
+    return { meta, messages, contentHash }
   })
 
   ipcMain.handle('search', async (_e, opts: SearchOptions) =>
     db.search({ ...opts, vaultId: await getActiveVaultId() })
   )
-
-  ipcMain.handle('stats', () => db.stats())
 
   ipcMain.handle('resume', async (_e, id: string) => {
     const meta = db.getSession(id)
@@ -104,12 +91,7 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     }
   })
 
-  ipcMain.handle('reindex', async () => {
-    const result = await reindex(db, await getVaults(), (p) => {
-      getWindow()?.webContents.send('reindex:progress', p)
-    })
-    return result
-  })
+  ipcMain.handle('reindex', async () => indexer.run(await getVaults()))
 
   // --- Vaults ---------------------------------------------------------------
 
@@ -139,9 +121,9 @@ export function registerIpc(db: IndexDB, getWindow: () => BrowserWindow | null):
     if (result.error) return { error: result.error }
 
     // Index the newly added vault in the background; the UI refreshes on 'done'.
-    void reindex(db, await getVaults(), (p) => {
-      getWindow()?.webContents.send('reindex:progress', p)
-    }).catch((err) => console.error('[vaults] reindex after add failed:', err))
+    void indexer
+      .run(await getVaults())
+      .catch((err) => console.error('[vaults] reindex after add failed:', err))
 
     return { config: result.config }
   })

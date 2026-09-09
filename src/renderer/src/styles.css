@@ -343,6 +343,11 @@ textarea {
   color: var(--text);
   padding: 11px 14px;
   cursor: pointer;
+  /* The sidebar routinely holds a thousand-plus cards. Skip layout and paint
+     for the ones off screen; `auto` lets the browser reuse each card's real
+     height once measured, so the scrollbar stays honest. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 .session-card:hover {
   background: var(--bg-hover);

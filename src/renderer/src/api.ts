@@ -17,8 +17,6 @@ interface SearchOptions {
 }
 
 interface GetSessionOptions {
-  /** Bypass caches and re-fetch remote transcripts. */
-  fresh?: boolean
   /** Fetch the session header only — `messages` comes back empty. */
   metaOnly?: boolean
   /** Hash of the transcript already held; unchanged content is not resent. */
@@ -41,14 +39,13 @@ interface Api {
   ): Promise<(TranscriptPayload & { meta: SessionMeta }) | null>
   loadSubAgent(sourcePath: string, knownHash?: string): Promise<TranscriptPayload>
   search(opts: SearchOptions): Promise<SearchHit[]>
-  stats(): Promise<{ sessions: number; messages: number }>
   resume(id: string): Promise<{ ok: boolean; command: string; error?: string }>
   copyResumeCommand(id: string): Promise<string>
   exportTranscriptHtml(
     html: string,
     defaultPath: string
   ): Promise<{ canceled: boolean; filePath?: string }>
-  reindex(): Promise<{ sessions: number; messages: number }>
+  reindex(): Promise<{ indexed: number; removed: number; changed: boolean; durationMs: number }>
   listVaults(): Promise<VaultConfig>
   /** Opens a native folder picker; returns the validated home + a suggested name, an error, or a cancel flag. */
   pickVaultDir(): Promise<{ home?: string; suggestedName?: string; error?: string; canceled?: boolean }>

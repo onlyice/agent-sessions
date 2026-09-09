@@ -1,13 +1,11 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { IndexDB } from './db'
+import { IndexService } from './index-service'
 import { registerIpc } from './ipc'
-import { reindex } from './indexer'
 import { getVaults } from './vaults'
-import { ensureUserPath } from './user-path'
 
 let mainWindow: BrowserWindow | null = null
-let db: IndexDB | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -41,25 +39,26 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   const dbPath = join(app.getPath('userData'), 'index.db')
-  db = new IndexDB(dbPath)
-  registerIpc(db, () => mainWindow)
+  // Opened (and migrated) here first, so the indexer process only ever meets a
+  // schema that is already current.
+  const db = new IndexDB(dbPath)
+  const indexer = new IndexService(db, dbPath, (progress) =>
+    mainWindow?.webContents.send('reindex:progress', progress)
+  )
+  registerIpc(db, indexer, () => mainWindow)
 
   createWindow()
 
   // Build/refresh the index in the background after the window is up.
   mainWindow?.webContents.once('did-finish-load', async () => {
     try {
-      // Agent CLIs live outside launchd's PATH; resolve the user's real one
-      // before any collector shells out (see user-path.ts).
-      await ensureUserPath()
-      const stats = await reindex(db!, await getVaults(), (p) =>
-        mainWindow?.webContents.send('reindex:progress', p)
-      )
-      console.log('[reindex] done', JSON.stringify(stats))
+      console.log('[reindex] done', JSON.stringify(await indexer.run(await getVaults())))
     } catch (err) {
       console.error('[reindex] failed:', err)
     }
   })
+
+  app.on('will-quit', () => indexer.dispose())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

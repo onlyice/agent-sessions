@@ -16,7 +16,11 @@ export default defineConfig({
     build: {
       rollupOptions: {
         external: externals,
-        input: { index: resolve(__dirname, "src/main/index.ts") },
+        input: {
+          index: resolve(__dirname, "src/main/index.ts"),
+          // Forked by index-service.ts as an Electron utility process.
+          "indexer-worker": resolve(__dirname, "src/main/indexer-worker.ts"),
+        },
       },
     },
   },

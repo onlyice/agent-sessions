@@ -4,7 +4,6 @@ export const AGENT_META: Record<AgentType, { label: string; color: string; short
   claude: { label: 'Claude Code', color: '#d97757', short: 'CC' },
   codex: { label: 'Codex CLI', color: '#10a37f', short: 'CX' },
   opencode: { label: 'OpenCode', color: '#7c8cff', short: 'OC' },
-  amp: { label: 'Amp', color: '#e0b341', short: 'AM' },
   pi: { label: 'Pi', color: '#c75fd9', short: 'PI' }
 }
 
@@ -19,7 +18,7 @@ export const ROLE_META: Record<Role, { label: string; color: string }> = {
 /**
  * Display label + color for a message header.
  *
- * Agents like Claude Code, Pi and Amp embed tool calls inside an assistant
+ * Agents like Claude Code and Pi embed tool calls inside an assistant
  * message and their results inside a user message — so a tool-only turn would
  * otherwise be mislabeled as "Assistant" / "User". When a message consists
  * purely of tool I/O, label it accordingly instead.

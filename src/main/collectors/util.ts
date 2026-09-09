@@ -10,6 +10,12 @@ export function expand(p: string): string {
 }
 
 /**
+ * How many source files a scan reads at once. Scans are IO-bound, so some
+ * overlap is a large win; the cap keeps peak memory to a handful of files.
+ */
+export const SCAN_CONCURRENCY = 8
+
+/**
  * Map over items with bounded concurrency, preserving input order. Scans are
  * IO-bound over many files, so a little parallelism helps a lot — but an
  * unbounded Promise.all over a whole thread directory holds every parsed file

@@ -1,7 +1,25 @@
 import { promises as fs } from 'fs'
 import { join, basename } from 'path'
-import type { Block, Collector, ListResult, Message, Role, SessionMeta, SubAgentMeta } from '../types'
-import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
+import type {
+  Block,
+  Collector,
+  ListResult,
+  Message,
+  Role,
+  ScanCache,
+  SessionMeta,
+  SubAgentMeta
+} from '../types'
+import {
+  SCAN_CONCURRENCY,
+  asText,
+  deriveTitle,
+  flatten,
+  mapLimit,
+  parseJsonl,
+  toMillis,
+  truncate
+} from './util'
 
 const rootFor = (home: string): string => join(home, '.claude', 'projects')
 
@@ -98,7 +116,7 @@ async function parse(path: string): Promise<Message[]> {
 export const claudeCollector: Collector = {
   agent: 'claude',
 
-  async list(home: string): Promise<ListResult> {
+  async list(home: string, cache: ScanCache): Promise<ListResult> {
     const root = rootFor(home)
     let projectDirs: string[]
     try {
@@ -106,28 +124,37 @@ export const claudeCollector: Collector = {
     } catch {
       return { metas: [] }
     }
-    const out: SessionMeta[] = []
+
+    const files: { path: string; dir: string }[] = []
     for (const dir of projectDirs) {
       const projDir = join(root, dir)
-      let files: string[]
       try {
-        files = (await fs.readdir(projDir)).filter((f) => f.endsWith('.jsonl'))
-      } catch {
-        continue
-      }
-      for (const file of files) {
-        const path = join(projDir, file)
-        try {
-          const stat = await fs.stat(path)
-          if (stat.size === 0) continue
-          const meta = await readMeta(path, dir, root)
-          if (meta) out.push(meta)
-        } catch {
-          // ignore unreadable file
+        for (const file of await fs.readdir(projDir)) {
+          if (file.endsWith('.jsonl')) files.push({ path: join(projDir, file), dir })
         }
+      } catch {
+        // Not a readable project directory.
       }
     }
-    return { metas: out }
+
+    const metas = await mapLimit(files, SCAN_CONCURRENCY, async ({ path, dir }) => {
+      try {
+        const stat = await fs.stat(path)
+        if (stat.size === 0) return null
+        // Everything in a Claude meta (including /rename titles and the
+        // sub-agent list, which is only written while the parent transcript is
+        // also being appended to) follows the JSONL, so the file's own stat is
+        // a sufficient cache key.
+        const cached = cache.get(path, stat.mtimeMs, stat.size)
+        if (cached) return cached
+        const meta = await readMeta(path, dir, root, stat)
+        if (meta) cache.set(path, stat.mtimeMs, stat.size, meta)
+        return meta
+      } catch {
+        return null // unreadable file
+      }
+    })
+    return { metas: metas.filter((m): m is SessionMeta => m != null) }
   },
 
   load: parse
@@ -249,7 +276,12 @@ async function readSubAgentMeta(
 
 
 /** Read lightweight metadata: scan first/last lines for cwd, sessionId, title. */
-async function readMeta(path: string, dirName: string, root: string): Promise<SessionMeta | null> {
+async function readMeta(
+  path: string,
+  dirName: string,
+  root: string,
+  stat: { birthtimeMs: number; mtimeMs: number }
+): Promise<SessionMeta | null> {
   const raw = await fs.readFile(path, 'utf8')
   const events = parseJsonl(raw)
   if (events.length === 0) return null
@@ -285,7 +317,6 @@ async function readMeta(path: string, dirName: string, root: string): Promise<Se
   }
   if (count === 0) return null
 
-  const stat = await fs.stat(path)
   const projDir = join(root, dirName)
   const sessionDir = join(projDir, sessionId)
   const subAgents = await discoverSubAgents(sessionDir)

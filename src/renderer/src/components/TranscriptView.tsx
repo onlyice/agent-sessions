@@ -438,18 +438,6 @@ export function TranscriptView({
         if (!alive) return
         setMeta(res?.meta ?? null)
         adopt(res?.messages ?? [], res?.contentHash ?? '')
-
-        // Cached content makes opening immediate. Refresh Amp sessions in the
-        // background so assistant turns omitted by list timestamps still land;
-        // the collector skips the network entirely for settled threads.
-        if (res?.meta.agent === 'amp') {
-          void api
-            .getSession(sessionId, { fresh: true, knownHash: res.contentHash })
-            .then((freshRes) => {
-              if (!alive || !freshRes) return
-              applyBackgroundRefresh(transcriptKey, freshRes)
-            })
-        }
       })
     }
     return () => {
@@ -477,7 +465,7 @@ export function TranscriptView({
           contentHash: subAgentRes?.contentHash ?? '',
           unchanged: subAgentRes?.unchanged
         }))
-      : api.getSession(sessionId, { fresh: true, knownHash }).then((res) => ({
+      : api.getSession(sessionId, { knownHash }).then((res) => ({
           meta: res?.meta ?? null,
           messages: res?.messages ?? [],
           contentHash: res?.contentHash ?? '',

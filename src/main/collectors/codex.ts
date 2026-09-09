@@ -1,8 +1,17 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import Database from 'better-sqlite3'
-import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
-import { deriveTitle, flatten, parseJsonl, stringify, toMillis, truncate } from './util'
+import type { Block, Collector, ListResult, Message, Role, ScanCache, SessionMeta } from '../types'
+import {
+  SCAN_CONCURRENCY,
+  deriveTitle,
+  flatten,
+  mapLimit,
+  parseJsonl,
+  stringify,
+  toMillis,
+  truncate
+} from './util'
 
 const rootFor = (home: string): string => join(home, '.codex', 'sessions')
 
@@ -184,31 +193,40 @@ async function parse(path: string): Promise<Message[]> {
 export const codexCollector: Collector = {
   agent: 'codex',
 
-  async list(home: string): Promise<ListResult> {
+  async list(home: string, cache: ScanCache): Promise<ListResult> {
     const files: string[] = []
     const [threadNames] = await Promise.all([loadThreadNames(home), walk(rootFor(home), files)])
-    const out: SessionMeta[] = []
-    for (const path of files) {
+
+    const metas = await mapLimit(files, SCAN_CONCURRENCY, async (path) => {
       try {
         const stat = await fs.stat(path)
-        if (stat.size === 0) continue
-        const meta = await readMeta(path, stat.mtimeMs, threadNames)
-        if (meta) out.push(meta)
+        if (stat.size === 0) return null
+        let meta = cache.get(path, stat.mtimeMs, stat.size)
+        if (!meta) {
+          meta = (await readMeta(path, stat.mtimeMs)) ?? undefined
+          if (meta) cache.set(path, stat.mtimeMs, stat.size, meta)
+        }
+        if (!meta) return null
+        // Thread names live in Codex's own state DB, not in the rollout file:
+        // a thread can be (re)named long after its last event, so re-apply the
+        // current name on top of whatever the cache remembers.
+        const named = threadNames.get(meta.nativeId)
+        return named ? { ...meta, title: deriveTitle(named) } : meta
       } catch {
-        /* ignore */
+        return null
       }
-    }
-    return { metas: out }
+    })
+    return { metas: metas.filter((m): m is SessionMeta => m != null) }
   },
 
   load: parse
 }
 
-async function readMeta(
-  path: string,
-  mtime: number,
-  threadNames: Map<string, string>
-): Promise<SessionMeta | null> {
+/**
+ * Metadata derived purely from the rollout file. The display title falls back
+ * to the first user turn; `list` layers the current thread name over it.
+ */
+async function readMeta(path: string, mtime: number): Promise<SessionMeta | null> {
   const events = parseJsonl(await fs.readFile(path, 'utf8'))
   let id = ''
   let cwd = ''
@@ -216,11 +234,17 @@ async function readMeta(
   let lastTs: number | null = null
   let firstUserText = ''
   let count = 0
+  let identified = false
 
   for (const ev of events) {
-    if (ev.type === 'session_meta' && ev.payload) {
-      id = ev.payload.id ?? id
-      cwd = ev.payload.cwd ?? cwd
+    // Only the first session_meta identifies this rollout. Resuming a thread
+    // writes a fresh rollout that replays the *original* session_meta after its
+    // own, so letting later ones win made several files claim one id: they
+    // overwrote each other in the index and went stale again on every pass.
+    if (ev.type === 'session_meta' && ev.payload && !identified) {
+      identified = true
+      id = ev.payload.id ?? ''
+      cwd = ev.payload.cwd ?? ''
       createdAt = toMillis(ev.payload.timestamp) ?? createdAt
     }
     const ts = toMillis(ev.timestamp)
@@ -246,7 +270,7 @@ async function readMeta(
     agent: 'codex',
     nativeId: id,
     cwd,
-    title: deriveTitle(threadNames.get(id) || firstUserText || truncate(cwd, 60)),
+    title: deriveTitle(firstUserText || truncate(cwd, 60)),
     createdAt: createdAt ?? mtime,
     updatedAt: lastTs ?? mtime,
     messageCount: count,

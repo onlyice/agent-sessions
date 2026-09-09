@@ -21,9 +21,6 @@ export function buildResumeCommand(meta: Pick<SessionMeta, 'agent' | 'nativeId' 
     case 'opencode':
       cmd = `opencode --session ${id}`
       break
-    case 'amp':
-      cmd = `amp threads continue ${id}`
-      break
     case 'pi':
       cmd = `pi --session ${id}`
       break

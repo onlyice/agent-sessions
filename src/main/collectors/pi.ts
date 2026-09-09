@@ -1,7 +1,16 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
-import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
-import { asText, deriveTitle, flatten, parseJsonl, toMillis, truncate } from './util'
+import type { Block, Collector, ListResult, Message, Role, ScanCache, SessionMeta } from '../types'
+import {
+  SCAN_CONCURRENCY,
+  asText,
+  deriveTitle,
+  flatten,
+  mapLimit,
+  parseJsonl,
+  toMillis,
+  truncate
+} from './util'
 
 const rootFor = (home: string): string => join(home, '.pi', 'agent', 'sessions')
 
@@ -72,59 +81,71 @@ async function walk(dir: string, acc: string[]): Promise<void> {
   }
 }
 
+async function readMeta(
+  path: string,
+  stat: { birthtimeMs: number; mtimeMs: number }
+): Promise<SessionMeta | null> {
+  const events = parseJsonl(await fs.readFile(path, 'utf8'))
+  const head = events.find((e) => e.type === 'session')
+  const id = head?.id
+  if (!id) return null
+  const cwd = head?.cwd ?? ''
+  let firstUserText = ''
+  let firstTs: number | null = toMillis(head?.timestamp)
+  let lastTs: number | null = null
+  let count = 0
+  for (const ev of events) {
+    if (ev.type !== 'message' || !ev.message) continue
+    const role = ev.message.role
+    if (role === 'user' || role === 'assistant') count++
+    const ts = toMillis(ev.message.timestamp ?? ev.timestamp)
+    if (ts) {
+      if (firstTs == null) firstTs = ts
+      lastTs = ts
+    }
+    if (!firstUserText && role === 'user') {
+      const t = asText(ev.message.content)
+      if (t) firstUserText = t
+    }
+  }
+  if (count === 0) return null
+
+  return {
+    id: `pi:${id}`,
+    vaultId: '',
+    agent: 'pi',
+    nativeId: id,
+    cwd,
+    title: deriveTitle(firstUserText || truncate(cwd, 60)),
+    createdAt: firstTs ?? stat.birthtimeMs,
+    updatedAt: lastTs ?? stat.mtimeMs,
+    messageCount: count,
+    sourcePath: path,
+    subAgents: []
+  }
+}
+
 export const piCollector: Collector = {
   agent: 'pi',
 
-  async list(home: string): Promise<ListResult> {
+  async list(home: string, cache: ScanCache): Promise<ListResult> {
     const files: string[] = []
     await walk(rootFor(home), files)
-    const out: SessionMeta[] = []
-    for (const path of files) {
+
+    const metas = await mapLimit(files, SCAN_CONCURRENCY, async (path) => {
       try {
         const stat = await fs.stat(path)
-        if (stat.size === 0) continue
-        const events = parseJsonl(await fs.readFile(path, 'utf8'))
-        const head = events.find((e) => e.type === 'session')
-        const id = head?.id
-        if (!id) continue
-        const cwd = head?.cwd ?? ''
-        let firstUserText = ''
-        let firstTs: number | null = toMillis(head?.timestamp)
-        let lastTs: number | null = null
-        let count = 0
-        for (const ev of events) {
-          if (ev.type !== 'message' || !ev.message) continue
-          const role = ev.message.role
-          if (role === 'user' || role === 'assistant') count++
-          const ts = toMillis(ev.message.timestamp ?? ev.timestamp)
-          if (ts) {
-            if (firstTs == null) firstTs = ts
-            lastTs = ts
-          }
-          if (!firstUserText && role === 'user') {
-            const t = asText(ev.message.content)
-            if (t) firstUserText = t
-          }
-        }
-        if (count === 0) continue
-        out.push({
-          id: `pi:${id}`,
-          vaultId: '',
-          agent: 'pi',
-          nativeId: id,
-          cwd,
-          title: deriveTitle(firstUserText || truncate(cwd, 60)),
-          createdAt: firstTs ?? stat.birthtimeMs,
-          updatedAt: lastTs ?? stat.mtimeMs,
-          messageCount: count,
-          sourcePath: path,
-          subAgents: []
-        })
+        if (stat.size === 0) return null
+        const cached = cache.get(path, stat.mtimeMs, stat.size)
+        if (cached) return cached
+        const meta = await readMeta(path, stat)
+        if (meta) cache.set(path, stat.mtimeMs, stat.size, meta)
+        return meta
       } catch {
-        /* ignore */
+        return null
       }
-    }
-    return { metas: out }
+    })
+    return { metas: metas.filter((m): m is SessionMeta => m != null) }
   },
 
   load: parse

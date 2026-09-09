@@ -1,4 +1,4 @@
-export type AgentType = 'claude' | 'codex' | 'opencode' | 'amp' | 'pi'
+export type AgentType = 'claude' | 'codex' | 'opencode' | 'pi'
 export type Role = 'user' | 'assistant' | 'thinking' | 'tool' | 'system'
 
 export interface Block {
@@ -73,4 +73,6 @@ export interface IndexProgress {
   agent?: AgentType
   indexed: number
   total: number
+  /** On the 'done' event: whether this pass wrote or removed anything. */
+  changed?: boolean
 }

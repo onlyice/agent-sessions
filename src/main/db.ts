@@ -1,11 +1,23 @@
 import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
+import { SCAN_PARSER_VERSION } from './collectors'
 import type { AgentType, Message, Role, SessionMeta, SubAgentMeta } from './types'
 
 export interface IndexedSession {
   mtime: number
   title: string
   agent: AgentType
+}
+
+/**
+ * A collector's last scan result for one source file. Building a SessionMeta
+ * means reading and JSON-parsing the whole transcript, which is what makes a
+ * rescan expensive; an unchanged (mtime, size) lets the collector skip it.
+ */
+export interface ScanCacheRow {
+  fileMtime: number
+  fileSize: number
+  meta: SessionMeta
 }
 
 /**
@@ -51,6 +63,9 @@ export class IndexDB {
     this.db = new Database(path)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('synchronous = NORMAL')
+    // The indexer runs in a separate process, so readers and the writer can
+    // meet on the same file; wait for the lock instead of throwing SQLITE_BUSY.
+    this.db.pragma('busy_timeout = 10000')
     this.init()
   }
 
@@ -103,6 +118,31 @@ export class IndexDB {
     // Created after the migration above so the column is guaranteed to exist.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_vault ON sessions(vaultId)')
 
+    // scan_cache holds nothing authoritative, so when its shape is out of date
+    // recreating it beats migrating it — the only cost is one slow rescan.
+    const scanCacheCols = this.db
+      .prepare("PRAGMA table_info('scan_cache')")
+      .all() as { name: string }[]
+    if (scanCacheCols.length > 0 && !scanCacheCols.some((c) => c.name === 'parser')) {
+      this.db.exec('DROP TABLE scan_cache')
+    }
+
+    this.db.exec(`
+      -- Memo of the last successful scan of each source file. Not authoritative
+      -- for anything the UI reads: dropping it only costs one slow rescan.
+      CREATE TABLE IF NOT EXISTS scan_cache (
+        sourcePath TEXT PRIMARY KEY,
+        fileMtime  REAL NOT NULL,
+        fileSize   INTEGER NOT NULL,
+        parser     INTEGER NOT NULL,
+        meta       TEXT NOT NULL
+      );
+    `)
+
+    // Entries parsed by an older collector describe the file the old way; drop
+    // them so the fix reaches files that haven't changed on disk.
+    this.db.prepare('DELETE FROM scan_cache WHERE parser <> ?').run(SCAN_PARSER_VERSION)
+
     this.db.exec(`
       -- Trigram tokenizer => case-insensitive substring search that also works
       -- for CJK text (the default unicode61 tokenizer can't segment Chinese).
@@ -114,6 +154,14 @@ export class IndexDB {
         timestamp UNINDEXED,
         tokenize = 'trigram'
       );
+    `)
+
+    // Amp support was removed, so drop its rows: the UI can no longer render or
+    // resume that agent. Runs after messages_fts is guaranteed to exist.
+    this.db.exec(`
+      DELETE FROM messages_fts WHERE sessionId IN (SELECT id FROM sessions WHERE agent = 'amp');
+      DELETE FROM scan_cache WHERE sourcePath IN (SELECT sourcePath FROM sessions WHERE agent = 'amp');
+      DELETE FROM sessions WHERE agent = 'amp';
     `)
   }
 
@@ -189,6 +237,42 @@ export class IndexDB {
         if (!m.text) continue
         insertMsg.run(m.text, meta.id, m.idx, m.role, m.timestamp)
       }
+    })
+    tx()
+  }
+
+  /** Every remembered scan result, keyed by source path. */
+  readScanCache(): Map<string, ScanCacheRow> {
+    const rows = this.db
+      .prepare('SELECT sourcePath, fileMtime, fileSize, meta FROM scan_cache')
+      .all() as { sourcePath: string; fileMtime: number; fileSize: number; meta: string }[]
+    const out = new Map<string, ScanCacheRow>()
+    for (const row of rows) {
+      try {
+        out.set(row.sourcePath, {
+          fileMtime: row.fileMtime,
+          fileSize: row.fileSize,
+          meta: JSON.parse(row.meta) as SessionMeta
+        })
+      } catch {
+        // A corrupt entry just means one file gets rescanned.
+      }
+    }
+    return out
+  }
+
+  /** Persist new/updated scan results and forget paths that vanished. */
+  writeScanCache(upserts: Map<string, ScanCacheRow>, deletes: Iterable<string>): void {
+    const put = this.db.prepare(
+      `INSERT OR REPLACE INTO scan_cache (sourcePath, fileMtime, fileSize, parser, meta)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    const drop = this.db.prepare('DELETE FROM scan_cache WHERE sourcePath = ?')
+    const tx = this.db.transaction(() => {
+      for (const [path, row] of upserts) {
+        put.run(path, row.fileMtime, row.fileSize, SCAN_PARSER_VERSION, JSON.stringify(row.meta))
+      }
+      for (const path of deletes) drop.run(path)
     })
     tx()
   }
@@ -303,14 +387,6 @@ export class IndexDB {
     const first = terms[0] ?? ''
     for (const r of rows) r.snippet = makeSnippet(r.snippet, first)
     return rows
-  }
-
-  stats(): { sessions: number; messages: number } {
-    const sessions = (this.db.prepare('SELECT COUNT(*) c FROM sessions').get() as { c: number }).c
-    const messages = (
-      this.db.prepare('SELECT COUNT(*) c FROM messages_fts').get() as { c: number }
-    ).c
-    return { sessions, messages }
   }
 }
 

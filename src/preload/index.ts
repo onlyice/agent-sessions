@@ -7,7 +7,6 @@ const api = {
   loadSubAgent: (sourcePath: string, knownHash?: string) =>
     ipcRenderer.invoke('subagent:load', sourcePath, knownHash),
   search: (opts: unknown) => ipcRenderer.invoke('search', opts),
-  stats: () => ipcRenderer.invoke('stats'),
   resume: (id: string) => ipcRenderer.invoke('resume', id),
   copyResumeCommand: (id: string) => ipcRenderer.invoke('resume:command', id),
   exportTranscriptHtml: (html: string, defaultPath: string) =>

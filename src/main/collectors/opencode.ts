@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Block, Collector, ListResult, Message, Role, SessionMeta } from '../types'
-import { deriveTitle, flatten, stringify, toMillis, truncate } from './util'
+import { SCAN_CONCURRENCY, deriveTitle, flatten, mapLimit, stringify, toMillis, truncate } from './util'
 
 const storageFor = (home: string): string =>
   join(home, '.local', 'share', 'opencode', 'storage')
@@ -113,6 +113,8 @@ async function parse(sessionPath: string): Promise<Message[]> {
 export const opencodeCollector: Collector = {
   agent: 'opencode',
 
+  // No scan cache here: an OpenCode session's metadata is one small JSON plus a
+  // directory listing, so re-reading it is already cheap.
   async list(home: string): Promise<ListResult> {
     const storage = storageFor(home)
     const sessRoot = sessionDir(storage)
@@ -123,32 +125,34 @@ export const opencodeCollector: Collector = {
     } catch {
       return { metas: [] }
     }
-    const out: SessionMeta[] = []
+
+    const paths: string[] = []
     for (const proj of projectDirs) {
       const dir = join(sessRoot, proj)
-      for (const file of await listFiles(dir)) {
-        const path = join(dir, file)
-        const s = await readJson(path)
-        if (!s?.id) continue
-        // messageCount: count files in the message dir (cheap, no parse).
-        const msgCount = (await listFiles(join(msgRoot, s.id))).length
-        if (msgCount === 0) continue
-        out.push({
-          id: `opencode:${s.id}`,
-          vaultId: '',
-          agent: 'opencode',
-          nativeId: s.id,
-          cwd: s.directory ?? '',
-          title: deriveTitle(s.title || truncate(s.directory ?? '', 60)),
-          createdAt: toMillis(s.time?.created) ?? Date.now(),
-          updatedAt: toMillis(s.time?.updated) ?? toMillis(s.time?.created) ?? Date.now(),
-          messageCount: msgCount,
-          sourcePath: path,
-          subAgents: []
-        })
-      }
+      for (const file of await listFiles(dir)) paths.push(join(dir, file))
     }
-    return { metas: out }
+
+    const metas = await mapLimit<string, SessionMeta | null>(paths, SCAN_CONCURRENCY, async (path) => {
+      const s = await readJson(path)
+      if (!s?.id) return null
+      // messageCount: count files in the message dir (cheap, no parse).
+      const msgCount = (await listFiles(join(msgRoot, s.id))).length
+      if (msgCount === 0) return null
+      return {
+        id: `opencode:${s.id}`,
+        vaultId: '',
+        agent: 'opencode',
+        nativeId: s.id,
+        cwd: s.directory ?? '',
+        title: deriveTitle(s.title || truncate(s.directory ?? '', 60)),
+        createdAt: toMillis(s.time?.created) ?? Date.now(),
+        updatedAt: toMillis(s.time?.updated) ?? toMillis(s.time?.created) ?? Date.now(),
+        messageCount: msgCount,
+        sourcePath: path,
+        subAgents: []
+      }
+    })
+    return { metas: metas.filter((m): m is SessionMeta => m != null) }
   },
 
   load: parse
