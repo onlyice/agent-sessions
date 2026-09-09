@@ -45,7 +45,13 @@ interface Api {
     html: string,
     defaultPath: string
   ): Promise<{ canceled: boolean; filePath?: string }>
-  reindex(): Promise<{ indexed: number; removed: number; changed: boolean; durationMs: number }>
+  reindex(): Promise<{
+    indexed: number
+    removed: number
+    changed: boolean
+    reclaimedBytes: number
+    durationMs: number
+  }>
   listVaults(): Promise<VaultConfig>
   /** Opens a native folder picker; returns the validated home + a suggested name, an error, or a cancel flag. */
   pickVaultDir(): Promise<{ home?: string; suggestedName?: string; error?: string; canceled?: boolean }>

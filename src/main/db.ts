@@ -1,5 +1,8 @@
 import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
+import { statfsSync } from 'fs'
+import { tmpdir } from 'os'
+import { dirname } from 'path'
 import { SCAN_PARSER_VERSION } from './collectors'
 import type { AgentType, Message, Role, SessionMeta, SubAgentMeta } from './types'
 
@@ -56,10 +59,31 @@ export interface SearchOptions {
   limit?: number
 }
 
+/**
+ * Deleting rows only returns their pages to SQLite's free list — the file keeps
+ * the space forever unless it is rewritten. Dropping an agent's sessions, or
+ * years of churn in a trigram index, can leave a lot stranded. These bounds
+ * decide when a rewrite is worth its cost; both must be met, so a small
+ * database is never rewritten over a rounding error and a large one is not
+ * rewritten to reclaim a sliver.
+ */
+const COMPACT_MIN_FREE_BYTES = 128 * 1024 * 1024
+const COMPACT_MIN_FREE_RATIO = 0.15
+
+/**
+ * VACUUM builds a complete second copy before it replaces the original, and the
+ * rewrite passes through the WAL on the way. Refuse to start unless the volumes
+ * involved can hold that comfortably: filling the user's disk to save some of
+ * it back would be a bad trade.
+ */
+const COMPACT_DISK_HEADROOM = 2.5
+
 export class IndexDB {
   private db: Database.Database
+  /** Set when a rewrite failed, so it isn't retried every few minutes. */
+  private compactionBroken = false
 
-  constructor(path: string) {
+  constructor(private readonly path: string) {
     this.db = new Database(path)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('synchronous = NORMAL')
@@ -241,6 +265,56 @@ export class IndexDB {
     tx()
   }
 
+  /** Bytes SQLite is holding but no longer using, and the file's logical size. */
+  private pageUsage(): { free: number; total: number } {
+    const pageSize = this.db.pragma('page_size', { simple: true }) as number
+    const pageCount = this.db.pragma('page_count', { simple: true }) as number
+    const freeCount = this.db.pragma('freelist_count', { simple: true }) as number
+    return { free: freeCount * pageSize, total: pageCount * pageSize }
+  }
+
+  /** Whether enough space is stranded in the file to be worth a rewrite. */
+  compactionDue(): boolean {
+    if (this.compactionBroken) return false
+    const { free, total } = this.pageUsage()
+    return free >= COMPACT_MIN_FREE_BYTES && free / total >= COMPACT_MIN_FREE_RATIO
+  }
+
+  /**
+   * Rewrite the database, returning stranded pages to the filesystem. Reports
+   * the bytes reclaimed, or 0 when it declined to run.
+   *
+   * Only ever call this from the indexer process: rewriting a multi-GB index
+   * takes minutes, and on the main process that would freeze the window for the
+   * duration. Readers on other connections keep seeing the pre-rewrite snapshot
+   * through the WAL, so the app stays usable while it runs.
+   */
+  compact(): number {
+    const { total } = this.pageUsage()
+    // VACUUM's scratch copy is a temp file, which SQLite may place on a
+    // different volume than the database itself; both need the headroom.
+    const available = Math.min(availableBytes(dirname(this.path)), availableBytes(tmpdir()))
+    if (available < total * COMPACT_DISK_HEADROOM) {
+      console.warn(
+        `[db] skipping compaction: needs ~${bytesToMb(total * COMPACT_DISK_HEADROOM)} MB free, ` +
+          `have ${bytesToMb(available)} MB`
+      )
+      return 0
+    }
+
+    try {
+      this.db.exec('VACUUM')
+      // The rewrite went through the WAL, which is now as large as the database
+      // was. Fold it back in so the space actually leaves the disk.
+      this.db.pragma('wal_checkpoint(TRUNCATE)')
+    } catch (err) {
+      this.compactionBroken = true
+      console.error('[db] compaction failed:', err)
+      return 0
+    }
+    return Math.max(0, total - this.pageUsage().total)
+  }
+
   /** Every remembered scan result, keyed by source path. */
   readScanCache(): Map<string, ScanCacheRow> {
     const rows = this.db
@@ -388,6 +462,21 @@ export class IndexDB {
     for (const r of rows) r.snippet = makeSnippet(r.snippet, first)
     return rows
   }
+}
+
+/** Free space on the volume holding `dir`, or 0 when it can't be determined. */
+function availableBytes(dir: string): number {
+  try {
+    const stats = statfsSync(dir)
+    return Number(stats.bavail) * Number(stats.bsize)
+  } catch {
+    // Treating "unknown" as "no room" keeps a rewrite from starting blind.
+    return 0
+  }
+}
+
+function bytesToMb(bytes: number): number {
+  return Math.round(bytes / (1024 * 1024))
 }
 
 /** Build a safe FTS5 MATCH expression: phrase-quote each whitespace term (AND). */

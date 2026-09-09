@@ -69,7 +69,7 @@ export interface VaultConfig {
 }
 
 export interface IndexProgress {
-  phase: 'scanning' | 'indexing' | 'done'
+  phase: 'scanning' | 'indexing' | 'compacting' | 'done'
   agent?: AgentType
   indexed: number
   total: number

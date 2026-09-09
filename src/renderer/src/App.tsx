@@ -336,7 +336,9 @@ export default function App(): React.JSX.Element {
         <footer className="side-foot">
           {progress && progress.phase !== 'done' ? (
             <span>
-              Indexing… {progress.indexed}/{progress.total}
+              {progress.phase === 'compacting'
+                ? 'Compacting index…'
+                : `Indexing… ${progress.indexed}/${progress.total}`}
             </span>
           ) : (
             <span>{visibleSessions.length} sessions</span>

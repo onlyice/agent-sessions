@@ -3,7 +3,7 @@ import type { IndexDB, ScanCacheRow } from './db'
 import type { AgentType, ScanCache, SessionMeta, Vault } from './types'
 
 export interface IndexProgress {
-  phase: 'scanning' | 'indexing' | 'done'
+  phase: 'scanning' | 'indexing' | 'compacting' | 'done'
   agent?: AgentType
   indexed: number
   total: number
@@ -18,6 +18,8 @@ export interface IndexResult {
   removed: number
   /** Whether this pass wrote or removed anything at all. */
   changed: boolean
+  /** Bytes handed back to the filesystem by a database rewrite, if one ran. */
+  reclaimedBytes: number
   durationMs: number
 }
 
@@ -158,7 +160,17 @@ export async function reindex(
   const complete = perVault.every(({ partialAgents }) => partialAgents.size === 0)
   db.writeScanCache(cache.pendingWrites, complete ? cache.unseenPaths : [])
 
+  // Deletions above (and the sessions of any agent the app has dropped) only
+  // free pages inside the file. Hand them back once enough have accumulated —
+  // last, so this pass's own deletions are included, and here rather than at
+  // startup because the indexer process can afford a multi-minute rewrite.
+  let reclaimedBytes = 0
+  if (db.compactionDue()) {
+    onProgress?.({ phase: 'compacting', indexed, total })
+    reclaimedBytes = db.compact()
+  }
+
   const changed = total > 0 || removed > 0
   onProgress?.({ phase: 'done', indexed, total, changed })
-  return { indexed, removed, changed, durationMs: Date.now() - startedAt }
+  return { indexed, removed, changed, reclaimedBytes, durationMs: Date.now() - startedAt }
 }
