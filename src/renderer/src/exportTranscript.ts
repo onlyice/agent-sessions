@@ -38,11 +38,57 @@ async function inlineUrls(css: string, baseUrl: string): Promise<string> {
   })
 }
 
-async function documentCss(): Promise<string> {
+function unquote(value: string): string {
+  return value.trim().replace(/^["']|["']$/g, '').toLowerCase()
+}
+
+/** Families named in the active --ui-font / --code-font stacks. */
+function activeFontFamilies(): Set<string> {
+  const root = getComputedStyle(document.documentElement)
+  const stacks = [root.getPropertyValue('--ui-font'), root.getPropertyValue('--code-font')]
+  return new Set(stacks.flatMap((stack) => stack.split(',').map(unquote)).filter(Boolean))
+}
+
+function parseUnicodeRange(value: string): [number, number][] {
+  return value.split(',').flatMap((part) => {
+    const range = part.trim().replace(/^U\+/i, '')
+    if (!range) return []
+    if (range.includes('?')) {
+      return [[parseInt(range.replaceAll('?', '0'), 16), parseInt(range.replaceAll('?', 'F'), 16)]]
+    }
+    const [lo, hi = lo] = range.split('-')
+    return [[parseInt(lo, 16), parseInt(hi, 16)]]
+  })
+}
+
+/**
+ * The bundled fonts span five families × every weight × every script subset,
+ * in both woff2 and woff — about 2.6 MB once base64-inlined. An export needs
+ * only the families the user has selected, only the subsets its text actually
+ * touches, and only woff2 (every browser that supports the export's
+ * ::highlight search also supports woff2).
+ */
+function fontFaceCss(rule: CSSFontFaceRule, families: Set<string>, codepoints: number[]): string | null {
+  if (!families.has(unquote(rule.style.getPropertyValue('font-family')))) return null
+  const unicodeRange = rule.style.getPropertyValue('unicode-range')
+  if (unicodeRange) {
+    const ranges = parseUnicodeRange(unicodeRange)
+    if (!codepoints.some((cp) => ranges.some(([lo, hi]) => cp >= lo && cp <= hi))) return null
+  }
+  return rule.cssText.replace(/,\s*url\([^)]*\)\s*format\(["']?woff["']?\)/g, '')
+}
+
+async function documentCss(text: string): Promise<string> {
+  const families = activeFontFamilies()
+  const codepoints = [...new Set(text)].map((char) => char.codePointAt(0)!)
   const stylesheets: Promise<string>[] = []
   for (const sheet of document.styleSheets) {
     try {
-      const rules = [...sheet.cssRules].map((rule) => rule.cssText)
+      const rules = [...sheet.cssRules].flatMap((rule) => {
+        if (!(rule instanceof CSSFontFaceRule)) return [rule.cssText]
+        const css = fontFaceCss(rule, families, codepoints)
+        return css ? [css] : []
+      })
       stylesheets.push(inlineUrls(rules.join('\n'), sheet.href ?? document.baseURI))
     } catch {
       // Ignore inaccessible third-party stylesheets.
@@ -264,7 +310,8 @@ export async function buildTranscriptHtml(root: HTMLElement, title: string): Pro
 
   const rootStyle = document.documentElement.getAttribute('style') ?? ''
   const mode = document.documentElement.dataset.mode ?? 'dark'
-  const css = await documentCss()
+  // The export script only ever adds ASCII text (counts, "No matches").
+  const css = await documentCss(`${clone.textContent ?? ''} 0123456789/ No matches msgs`)
   // The export is opened in whatever browser the user has set as default, and
   // custom-property support inside highlight pseudo-elements is uneven across
   // engines. Inline the resolved palette so the highlight cannot come out
