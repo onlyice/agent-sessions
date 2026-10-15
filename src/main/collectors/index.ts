@@ -12,12 +12,12 @@ export const collectors: Record<AgentType, Collector> = {
 }
 
 /**
- * Bump this whenever a collector changes how it derives a SessionMeta from a
- * source file. Scans are cached against a file's (mtime, size) alone, so an
+ * Bump this whenever a collector changes metadata or transcript parsing.
+ * Scans are cached against a file's (mtime, size) alone, so an
  * unchanged file would otherwise keep serving metadata from the old parser
  * forever — a parser fix would only reach files the user happened to touch.
  */
-export const SCAN_PARSER_VERSION = 2
+export const SCAN_PARSER_VERSION = 3
 
 export const AGENT_LABELS: Record<AgentType, string> = {
   claude: 'Claude Code',

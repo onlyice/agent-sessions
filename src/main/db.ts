@@ -165,6 +165,10 @@ export class IndexDB {
 
     // Entries parsed by an older collector describe the file the old way; drop
     // them so the fix reaches files that haven't changed on disk.
+    this.db.prepare(`
+      UPDATE sessions SET mtime = 0
+      WHERE sourcePath IN (SELECT sourcePath FROM scan_cache WHERE parser <> ?)
+    `).run(SCAN_PARSER_VERSION)
     this.db.prepare('DELETE FROM scan_cache WHERE parser <> ?').run(SCAN_PARSER_VERSION)
 
     this.db.exec(`

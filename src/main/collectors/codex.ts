@@ -8,10 +8,11 @@ import {
   flatten,
   mapLimit,
   parseJsonl,
-  stringify,
   toMillis,
   truncate
 } from './util'
+
+import { customToolInput, parseToolOutput } from './codex-tools'
 
 const rootFor = (home: string): string => join(home, '.codex', 'sessions')
 
@@ -105,20 +106,6 @@ function reasoningText(payload: any): string {
     : ''
 }
 
-function parseCommandOutput(raw: string): { text: string; exitCode?: number } {
-  const lines = raw.split('\n')
-  const outputLineIndex = lines.findIndex((line, index) => index <= 8 && line === 'Output:')
-  if (outputLineIndex < 0) return { text: raw }
-
-  const header = lines.slice(0, outputLineIndex)
-  const hasCodexOutputHeader = header.some((line) => /^Chunk ID: \S+/.test(line))
-  if (!hasCodexOutputHeader) return { text: raw }
-
-  const exitLine = header.find((line) => /^Process exited with code -?\d+$/.test(line))
-  const exitCode = exitLine ? Number(exitLine.match(/-?\d+$/)?.[0]) : undefined
-  return { text: lines.slice(outputLineIndex + 1).join('\n'), exitCode }
-}
-
 async function parse(path: string): Promise<Message[]> {
   const events = parseJsonl(await fs.readFile(path, 'utf8'))
   const messages: Message[] = []
@@ -149,25 +136,23 @@ async function parse(path: string): Promise<Message[]> {
         blocks: [{ kind: 'thinking', text }],
         timestamp: ts
       })
-    } else if (p.type === 'function_call') {
-      let input: unknown = p.arguments
-      try {
-        input = JSON.parse(p.arguments)
-      } catch {
-        /* keep raw string */
+    } else if (p.type === 'function_call' || p.type === 'custom_tool_call') {
+      let input: unknown
+      if (p.type === 'custom_tool_call') {
+        input = customToolInput(p.name, p.input)
+      } else {
+        input = p.arguments
+        try {
+          input = JSON.parse(p.arguments)
+        } catch {
+          /* keep raw string */
+        }
       }
       const blocks: Block[] = [{ kind: 'tool_use', toolName: p.name, toolCallId: p.call_id, toolInput: input }]
       messages.push({ idx: idx++, role: 'tool', text: flatten(blocks), blocks, timestamp: ts })
-    } else if (p.type === 'function_call_output') {
-      const raw = typeof p.output === 'string' ? p.output : stringify(p.output)
-      const { text: out, exitCode } = typeof p.output === 'string' ? parseCommandOutput(raw) : { text: raw }
-      if (!out.trim() && exitCode == null) continue
-      let toolResult: unknown
-      try {
-        toolResult = JSON.parse(raw)
-      } catch {
-        /* not all tool outputs are JSON */
-      }
+    } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
+      const { text: out, exitCode, toolResult, isError } = parseToolOutput(p.output)
+      if (!out.trim() && exitCode == null && !isError) continue
       const blocks: Block[] = [
         {
           kind: 'tool_result',
@@ -175,13 +160,13 @@ async function parse(path: string): Promise<Message[]> {
           toolCallId: p.call_id,
           toolResult,
           exitCode,
-          isError: exitCode != null && exitCode !== 0 ? true : undefined
+          isError
         }
       ]
       messages.push({
         idx: idx++,
         role: 'tool',
-        text: out.trim() || (exitCode != null ? `Exit code ${exitCode}` : ''),
+        text: out.trim() || (exitCode != null ? `Exit code ${exitCode}` : 'Tool error'),
         blocks,
         timestamp: ts
       })
