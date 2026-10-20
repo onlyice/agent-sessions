@@ -7,6 +7,7 @@ import { buildTranscriptHtml } from '../exportTranscript'
 import type { Message, Role, SessionMeta, SubAgentMeta } from '../types'
 import { AGENT_META, ROLE_META, fullTime, shortPath } from '../util'
 import { MessageItem } from './MessageItem'
+import { MessageToc } from './MessageToc'
 
 interface Props {
   sessionId: string
@@ -269,6 +270,7 @@ export function TranscriptView({
   const [totalMatches, setTotalMatches] = useState(0)
   const [viewRevision, setViewRevision] = useState(0)
   const [exportSubAgents, setExportSubAgents] = useState<ExportSubAgent[]>([])
+  const [tocTarget, setTocTarget] = useState<{ transcriptKey: string; key: string } | null>(null)
   // Collapsible blocks forced open because they hold a match. Kept as two sets
   // so the in-transcript search and a sidebar jump cannot clobber each other.
   const [searchExpandIds, setSearchExpandIds] = useState<ReadonlySet<string>>(NO_FORCED_IDS)
@@ -284,6 +286,7 @@ export function TranscriptView({
   const handledRevisionRef = useRef(revision)
   const followBottomAfterRefreshRef = useRef(false)
   const handledJumpRef = useRef('')
+  const tocJumpFrameRef = useRef(0)
 
   /**
    * Scroll a match into view with a short, cancellable animation. Accepts a
@@ -367,6 +370,10 @@ export function TranscriptView({
   }, [])
 
   const displayMessages = useMemo(() => mergeToolMessages(messages), [messages])
+  const tocEntries = useMemo(
+    () => displayMessages.filter(({ message }) => message.role === 'user' || message.role === 'assistant'),
+    [displayMessages]
+  )
   const visibleDisplayMessages = useMemo(() => {
     if (roleFilters.size === 0) return displayMessages
     return displayMessages.filter(({ message }) => roleFilters.has(message.role))
@@ -392,6 +399,28 @@ export function TranscriptView({
   }, [searchExpandIds, jumpExpandIds])
 
   const transcriptKey = `${sessionId}:${subAgent?.sourcePath ?? ''}`
+
+  useEffect(() => () => {
+    cancelAnimationFrame(tocJumpFrameRef.current)
+    cancelAnimationFrame(scrollAnimRef.current)
+  }, [transcriptKey])
+
+  function jumpToTocMessage({ key, message }: { key: string; message: Message }): void {
+    // Commit the filter change before measuring a previously hidden message.
+    flushSync(() => {
+      setRoleFilters((current) => {
+        if (current.size === 0 || current.has(message.role)) return current
+        return new Set([...current, message.role])
+      })
+      setTocTarget({ transcriptKey, key })
+    })
+    cancelAnimationFrame(tocJumpFrameRef.current)
+    // Let search effects finish reacting to the filter before taking over scrolling.
+    tocJumpFrameRef.current = requestAnimationFrame(() => {
+      const target = scrollRef.current?.querySelector<HTMLElement>(`[data-message-key="${key}"]`)
+      if (target) animateScrollTo(target, 'start')
+    })
+  }
 
   /**
    * Fold a background reload into the open transcript. The main process
@@ -928,6 +957,8 @@ export function TranscriptView({
           {displayMessages.map(({ key, message, relatedIdxs }) => (
             <div
               key={key}
+              data-message-key={key}
+              className={tocTarget?.transcriptKey === transcriptKey && tocTarget.key === key ? 'toc-target' : undefined}
               data-idx={relatedIdxs.join(' ')}
               data-message-role={message.role}
               hidden={roleFilters.size > 0 && !roleFilters.has(message.role)}
@@ -950,6 +981,12 @@ export function TranscriptView({
         </CollapseContext.Provider>
       </div>
 
+      <MessageToc
+        key={transcriptKey}
+        entries={tocEntries}
+        selectedKey={tocTarget?.transcriptKey === transcriptKey ? tocTarget.key : null}
+        onSelect={jumpToTocMessage}
+      />
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
