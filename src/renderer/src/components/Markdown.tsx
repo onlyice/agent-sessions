@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
-import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-
-marked.setOptions({ gfm: true, breaks: true })
+import { renderMarkdown } from '../markdown'
 
 // Open links in the user's browser instead of navigating the renderer window.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -13,11 +11,19 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 })
 
 /** Render trusted-but-arbitrary transcript text as sanitized Markdown. */
-export function Markdown({ text, className }: { text: string; className?: string }): React.JSX.Element {
+export function Markdown({
+  text,
+  className,
+  literalHtml = false
+}: {
+  text: string
+  className?: string
+  literalHtml?: boolean
+}): React.JSX.Element {
   const html = useMemo(() => {
-    const rendered = marked.parse(text, { async: false }) as string
+    const rendered = renderMarkdown(text, literalHtml)
     return DOMPurify.sanitize(rendered)
-  }, [text])
+  }, [text, literalHtml])
   // A fresh `{ __html }` object per render would make React re-set innerHTML on
   // every parent re-render, replacing the text nodes that search highlights
   // (CSS Custom Highlight ranges) point at. Cache the props object so React

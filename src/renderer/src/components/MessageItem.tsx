@@ -215,24 +215,24 @@ function ToolBlock({ input, output }: { input?: Block; output?: Block }): React.
   )
 }
 
-function TextBlock({ block }: { block: Block }): React.JSX.Element {
+function TextBlock({ block, literalHtml }: { block: Block; literalHtml?: boolean }): React.JSX.Element {
   const thinking = block.kind === 'thinking'
   const text = block.text ?? ''
   return (
     <>
       <div className="text-view-markdown">
-        <Markdown className={thinking ? 'block-thinking' : 'block-text'} text={text} />
+        <Markdown className={thinking ? 'block-thinking' : 'block-text'} text={text} literalHtml={literalHtml} />
       </div>
       <pre className={`text-view-source block-source${thinking ? ' thinking' : ''}`}>{text}</pre>
     </>
   )
 }
 
-function BlockView({ block }: { block: Block }): React.JSX.Element | null {
+function BlockView({ block, literalHtml }: { block: Block; literalHtml?: boolean }): React.JSX.Element | null {
   switch (block.kind) {
     case 'text':
     case 'thinking':
-      return <TextBlock block={block} />
+      return <TextBlock block={block} literalHtml={literalHtml} />
     case 'tool_use':
       return <ToolBlock input={block} />
     case 'tool_result':
@@ -254,7 +254,7 @@ function BlockView({ block }: { block: Block }): React.JSX.Element | null {
   }
 }
 
-function BlocksView({ blocks }: { blocks: Block[] }): React.JSX.Element {
+function BlocksView({ blocks, literalHtml }: { blocks: Block[]; literalHtml?: boolean }): React.JSX.Element {
   const nodes: React.ReactNode[] = []
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
@@ -263,7 +263,7 @@ function BlocksView({ blocks }: { blocks: Block[] }): React.JSX.Element {
       nodes.push(<ToolBlock key={i} input={block} output={next} />)
       i++
     } else {
-      nodes.push(<BlockView key={i} block={block} />)
+      nodes.push(<BlockView key={i} block={block} literalHtml={literalHtml} />)
     }
   }
   return <>{nodes}</>
@@ -326,7 +326,7 @@ export function MessageItem({
   const [view, setView] = useState<TextView>('markdown')
   const hasText = message.blocks.some((b) => b.kind === 'text' || b.kind === 'thinking')
   const hasTool = message.blocks.some((b) => b.kind === 'tool_use' || b.kind === 'tool_result')
-  const blocks = <BlocksView blocks={message.blocks} />
+  const blocks = <BlocksView blocks={message.blocks} literalHtml={message.role === 'system'} />
 
   return (
     <div className={`msg msg-${message.role}${view === 'source' ? ' source-view' : ''}`}>
