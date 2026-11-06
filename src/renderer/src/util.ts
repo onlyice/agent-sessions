@@ -29,6 +29,7 @@ export function messageLabel(m: Message): { label: string; color: string } {
     if (kinds.has('tool_use')) return { label: 'Tool Input', color: ROLE_META.tool.color }
     if (kinds.has('tool_result')) return { label: 'Tool Output', color: ROLE_META.tool.color }
   }
+  if (m.midTurn) return { label: 'User (mid-turn)', color: ROLE_META.user.color }
   return ROLE_META[m.role]
 }
 

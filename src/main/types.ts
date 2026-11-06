@@ -35,6 +35,8 @@ export interface Message {
   model?: string
   /** For merged tool messages: elapsed time between the call and its result, in ms. */
   toolDurationMs?: number
+  /** A user message sent while the agent was working, delivered inside its running turn. */
+  midTurn?: boolean
 }
 
 export interface SubAgentMeta {

@@ -71,6 +71,28 @@ function blocksFromClaude(message: any, toolUseResult?: unknown): Block[] {
   return blocks
 }
 
+/**
+ * A message Claude Code delivered inside a running turn: a prompt the user
+ * typed while the agent was working, or a background-task notification. Such
+ * messages never become a `user` event — they are only recorded as a
+ * `queued_command` attachment.
+ */
+function queuedMessage(ev: any): Omit<Message, 'idx'> | null {
+  const attachment = ev.attachment
+  if (attachment?.type !== 'queued_command') return null
+  const text = typeof attachment.prompt === 'string' ? attachment.prompt : ''
+  if (!text.trim()) return null
+  const notification =
+    attachment.commandMode === 'task-notification' || attachment.origin?.kind === 'task-notification'
+  return {
+    role: notification ? 'system' : 'user',
+    text,
+    blocks: [{ kind: 'text', text }],
+    timestamp: toMillis(ev.timestamp ?? attachment.timestamp),
+    midTurn: notification ? undefined : true
+  }
+}
+
 async function parse(path: string): Promise<Message[]> {
   const raw = await fs.readFile(path, 'utf8')
   const events = parseJsonl(raw)
@@ -87,6 +109,11 @@ async function parse(path: string): Promise<Message[]> {
         blocks: [{ kind: 'text', text }],
         timestamp: toMillis(ev.timestamp)
       })
+      continue
+    }
+    if (ev.type === 'attachment') {
+      const queued = queuedMessage(ev)
+      if (queued) messages.push({ idx: idx++, ...queued })
       continue
     }
     if (ev.type !== 'user' && ev.type !== 'assistant') continue
@@ -306,6 +333,7 @@ async function readMeta(
       if (firstTs == null) firstTs = ts
       lastTs = ts
     }
+    if (ev.type === 'attachment' && queuedMessage(ev)) count++
     if (ev.type === 'user' || ev.type === 'assistant') {
       count++
       if (!firstUserText && ev.type === 'user' && ev.message) {
