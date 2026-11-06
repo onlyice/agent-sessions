@@ -149,7 +149,7 @@ const EXPORT_SCRIPT = `
       .map((button) => button.dataset.filterRole)
       .filter(Boolean)
   );
-  if (activeRoles.size === 0) { activeRoles.add('user'); activeRoles.add('assistant'); }
+  if (activeRoles.size === 0) { activeRoles.add('user'); activeRoles.add('final'); }
   let matches = [], current = 0;
 
   function visibleMessages() {
@@ -179,7 +179,8 @@ const EXPORT_SCRIPT = `
   }
   function applyFilter() {
     document.querySelectorAll('[data-message-role]').forEach((el) => {
-      el.hidden = activeRoles.size > 0 && !activeRoles.has(el.dataset.messageRole);
+      el.hidden = activeRoles.size > 0 && !activeRoles.has(el.dataset.messageRole) &&
+        !(activeRoles.has('final') && el.hasAttribute('data-message-final'));
     });
     document.querySelectorAll('[data-filter-role]').forEach((button) => {
       const role = button.dataset.filterRole;

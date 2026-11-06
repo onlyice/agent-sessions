@@ -29,6 +29,8 @@ interface DisplayMessage {
   key: string
   message: Message
   relatedIdxs: number[]
+  /** The last assistant reply of its turn — the agent's summary of what it did. */
+  final: boolean
 }
 
 interface ExportSubAgent {
@@ -36,7 +38,21 @@ interface ExportSubAgent {
   messages: Message[]
 }
 
-const ALL_ROLES: Role[] = ['user', 'assistant', 'thinking', 'tool', 'system']
+/** A role, or 'final' for just the last assistant reply of each turn. */
+type MessageFilter = Role | 'final'
+
+const MESSAGE_FILTERS: Array<{ filter: MessageFilter; label: string; color: string }> = [
+  { filter: 'user', ...ROLE_META.user },
+  { filter: 'assistant', ...ROLE_META.assistant },
+  { filter: 'final', label: 'Final response', color: '#13c2c2' },
+  { filter: 'thinking', ...ROLE_META.thinking },
+  { filter: 'tool', ...ROLE_META.tool },
+  { filter: 'system', ...ROLE_META.system }
+]
+
+function isFilteredIn(entry: DisplayMessage, filters: ReadonlySet<MessageFilter>): boolean {
+  return filters.size === 0 || filters.has(entry.message.role) || (entry.final && filters.has('final'))
+}
 
 function isToolBlock(kind: Message['blocks'][number]['kind']): boolean {
   return kind === 'tool_use' || kind === 'tool_result'
@@ -71,7 +87,8 @@ function splitToolBlocks(messages: Message[]): DisplayMessage[] {
           text: blocks.map((block) => block.text).filter(Boolean).join('\n'),
           blocks
         },
-        relatedIdxs: [message.idx]
+        relatedIdxs: [message.idx],
+        final: false
       })
     }
 
@@ -132,6 +149,7 @@ function mergeToolMessages(messages: Message[]): DisplayMessage[] {
           : undefined
       out.push({
         key: current.key,
+        final: false,
         message: {
           ...current.message,
           role: 'tool',
@@ -147,7 +165,27 @@ function mergeToolMessages(messages: Message[]): DisplayMessage[] {
       out.push(current)
     }
   }
+  markFinalResponses(out)
   return out
+}
+
+/**
+ * Agents rarely flag their final answer, so take the last assistant reply
+ * before each user message (or the end of the transcript) as the turn's final
+ * response. Tool traffic, thinking, system notes and messages the user sent
+ * mid-turn do not end a turn: the agent keeps working through them.
+ */
+function markFinalResponses(messages: DisplayMessage[]): void {
+  let lastAssistant: DisplayMessage | undefined
+  for (const entry of messages) {
+    if (entry.message.role === 'user' && !entry.message.midTurn) {
+      if (lastAssistant) lastAssistant.final = true
+      lastAssistant = undefined
+    } else if (entry.message.role === 'assistant') {
+      lastAssistant = entry
+    }
+  }
+  if (lastAssistant) lastAssistant.final = true
 }
 
 /** A reload folded into an already-open transcript. */
@@ -238,8 +276,13 @@ function ExportSubAgentSection({ meta, messages }: ExportSubAgent): React.JSX.El
   const displayMessages = mergeToolMessages(messages)
   return (
     <section data-export-session={meta.id} hidden>
-      {displayMessages.map(({ key, message, relatedIdxs }) => (
-        <div key={key} data-idx={relatedIdxs.join(' ')} data-message-role={message.role}>
+      {displayMessages.map(({ key, message, relatedIdxs, final }) => (
+        <div
+          key={key}
+          data-idx={relatedIdxs.join(' ')}
+          data-message-role={message.role}
+          data-message-final={final || undefined}
+        >
           <MessageItem message={message} />
         </div>
       ))}
@@ -260,7 +303,7 @@ export function TranscriptView({
 }: Props): React.JSX.Element {
   const [meta, setMeta] = useState<SessionMeta | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [roleFilters, setRoleFilters] = useState<Set<Role>>(new Set())
+  const [roleFilters, setRoleFilters] = useState<Set<MessageFilter>>(new Set())
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string>('')
   const [showSearch, setShowSearch] = useState(false)
@@ -371,12 +414,12 @@ export function TranscriptView({
 
   const displayMessages = useMemo(() => mergeToolMessages(messages), [messages])
   const tocEntries = useMemo(
-    () => displayMessages.filter(({ message }) => message.role === 'user' || message.role === 'assistant'),
+    () => displayMessages.filter(({ message, final }) => message.role === 'user' || final),
     [displayMessages]
   )
   const visibleDisplayMessages = useMemo(() => {
     if (roleFilters.size === 0) return displayMessages
-    return displayMessages.filter(({ message }) => roleFilters.has(message.role))
+    return displayMessages.filter((entry) => isFilteredIn(entry, roleFilters))
   }, [displayMessages, roleFilters])
 
   /**
@@ -405,12 +448,13 @@ export function TranscriptView({
     cancelAnimationFrame(scrollAnimRef.current)
   }, [transcriptKey])
 
-  function jumpToTocMessage({ key, message }: { key: string; message: Message }): void {
+  function jumpToTocMessage(entry: DisplayMessage): void {
+    const { key } = entry
     // Commit the filter change before measuring a previously hidden message.
     flushSync(() => {
       setRoleFilters((current) => {
-        if (current.size === 0 || current.has(message.role)) return current
-        return new Set([...current, message.role])
+        if (isFilteredIn(entry, current)) return current
+        return new Set([...current, entry.final ? 'final' : entry.message.role])
       })
       setTocTarget({ transcriptKey, key })
     })
@@ -707,10 +751,10 @@ export function TranscriptView({
     setTimeout(() => setToast(''), 2500)
   }
 
-  function toggleRole(role: Role): void {
+  function toggleFilter(filter: MessageFilter): void {
     setRoleFilters((current) => {
       const next = new Set(current)
-      next.has(role) ? next.delete(role) : next.add(role)
+      next.has(filter) ? next.delete(filter) : next.add(filter)
       return next
     })
   }
@@ -882,21 +926,17 @@ export function TranscriptView({
           >
             All
           </button>
-          {ALL_ROLES.map((role) => (
+          {MESSAGE_FILTERS.map(({ filter, label, color }) => (
             <button
-              key={role}
-              className={`chip ${roleFilters.has(role) ? 'on' : ''}`}
-              style={
-                roleFilters.has(role)
-                  ? { borderColor: ROLE_META[role].color, color: ROLE_META[role].color }
-                  : undefined
-              }
-              onClick={() => toggleRole(role)}
-              aria-pressed={roleFilters.has(role)}
-              data-filter-role={role}
-              data-filter-color={ROLE_META[role].color}
+              key={filter}
+              className={`chip ${roleFilters.has(filter) ? 'on' : ''}`}
+              style={roleFilters.has(filter) ? { borderColor: color, color } : undefined}
+              onClick={() => toggleFilter(filter)}
+              aria-pressed={roleFilters.has(filter)}
+              data-filter-role={filter}
+              data-filter-color={color}
             >
-              {ROLE_META[role].label}
+              {label}
             </button>
           ))}
           <span className="message-filter-count">
@@ -954,18 +994,22 @@ export function TranscriptView({
       <div className="transcript-scroll" ref={scrollRef}>
         <CollapseContext.Provider value={forcedExpanded}>
         <section data-export-session="main">
-          {displayMessages.map(({ key, message, relatedIdxs }) => (
-            <div
-              key={key}
-              data-message-key={key}
-              className={tocTarget?.transcriptKey === transcriptKey && tocTarget.key === key ? 'toc-target' : undefined}
-              data-idx={relatedIdxs.join(' ')}
-              data-message-role={message.role}
-              hidden={roleFilters.size > 0 && !roleFilters.has(message.role)}
-            >
-              <MessageItem message={message} onViewChange={() => setViewRevision((value) => value + 1)} />
-            </div>
-          ))}
+          {displayMessages.map((entry) => {
+            const { key, message, relatedIdxs, final } = entry
+            return (
+              <div
+                key={key}
+                data-message-key={key}
+                className={tocTarget?.transcriptKey === transcriptKey && tocTarget.key === key ? 'toc-target' : undefined}
+                data-idx={relatedIdxs.join(' ')}
+                data-message-role={message.role}
+                data-message-final={final || undefined}
+                hidden={!isFilteredIn(entry, roleFilters)}
+              >
+                <MessageItem message={message} onViewChange={() => setViewRevision((value) => value + 1)} />
+              </div>
+            )
+          })}
           {messages.length === 0 && <div className="empty">No renderable messages</div>}
           {messages.length > 0 && visibleDisplayMessages.length === 0 && (
             <div className="empty filter-empty">No messages match this filter</div>

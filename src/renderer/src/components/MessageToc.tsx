@@ -1,21 +1,21 @@
 import { useId, useState } from 'react'
 import { ChevronDown, ChevronUp, List } from 'lucide-react'
 import type { Message } from '../types'
-import { ROLE_META } from '../util'
+import { messageLabel } from '../util'
 
 interface TocEntry {
   key: string
   message: Message
 }
 
-export function MessageToc({
+export function MessageToc<Entry extends TocEntry>({
   entries,
   selectedKey,
   onSelect
 }: {
-  entries: TocEntry[]
+  entries: Entry[]
   selectedKey: string | null
-  onSelect: (entry: TocEntry) => void
+  onSelect: (entry: Entry) => void
 }): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   const listId = useId()
@@ -37,6 +37,7 @@ export function MessageToc({
       <ol id={listId} className="message-toc-list" hidden={!open}>
         {open && entries.map((entry, index) => {
           const { message } = entry
+          const label = messageLabel(message)
           const preview = message.text.replace(/\s+/g, ' ').trim() ||
             message.blocks.map((block) => block.kind === 'image' ? '[Image]' : block.kind === 'file' ? '[File]' : '').filter(Boolean).join(' ') ||
             '(No text)'
@@ -45,11 +46,11 @@ export function MessageToc({
               <button
                 className="message-toc-item"
                 aria-current={selectedKey === entry.key ? 'location' : undefined}
-                title={`${ROLE_META[message.role].label}: ${preview.slice(0, 500)}`}
+                title={`${label.label}: ${preview.slice(0, 500)}`}
                 onClick={() => onSelect(entry)}
               >
                 <span className="message-toc-item-meta">
-                  <span style={{ color: ROLE_META[message.role].color }}>{ROLE_META[message.role].label}</span>
+                  <span style={{ color: label.color }}>{label.label}</span>
                   <span>#{index + 1}</span>
                 </span>
                 <span className="message-toc-preview">{preview.slice(0, 160)}</span>
